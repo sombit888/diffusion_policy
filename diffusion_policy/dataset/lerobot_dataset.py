@@ -303,3 +303,13 @@ def save_to_disk(dataset: LeRobotDataset, output_path: str) -> None:
     safetensors.torch.save_file(
         episode_data_index, os.path.join(meta_data_path, split, 'episode_data_index.safetensors')
     )
+
+if __name__ == "__main__":
+    # Test
+    breakpoint()
+    dataset = LeRobotDataset(
+        "/work/sombit_dey/insait_droid/insait_droid/"
+    )
+    
+    print(dataset)
+    print(dataset[0])
