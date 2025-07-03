@@ -324,7 +324,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem,
 )
 def main(cfg):
-    workspace = TrainDiffusionUnetImageWorkspace(cfg)
+    workspace = TrainDiffusionUnetImageWorkspaceDroid(cfg)
     workspace.run()
 
 
