@@ -14,7 +14,7 @@
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 import datasets
 import numpy as np
@@ -186,7 +186,7 @@ class LeRobotDataset:
     def dataset_name(self) -> str:
         return os.path.basename(os.path.normpath(self.dataset_path))
 
-    def episode_index_from_index(self, index: int | np.ndarray) -> int | np.ndarray:
+    def episode_index_from_index(self, index: Union[int, np.ndarray]) -> Union[int, np.ndarray]:
         assert 0 <= index < len(self), f"0 <= {index} < {len(self)} not true"
         episode_index = (
             np.searchsorted(self.episode_data_index["from"], index, side="right") - 1
