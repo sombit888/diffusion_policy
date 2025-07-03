@@ -38,6 +38,7 @@ from lerobot_utils import (
     load_info,
     np_column,
 )
+from base_dataset import BaseLowdimDataset,BaseImageDataset
 
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
 CODEBASE_VERSION = "v1.6"
@@ -329,6 +330,21 @@ def save_to_disk(dataset: LeRobotDataset, output_path: str) -> None:
         os.path.join(meta_data_path, split, "episode_data_index.safetensors"),
     )
 
+class LeRobotDatasetDiffusion(BaseImageDataset):
+    """
+    A dataset class for LeRobotDataset that inherits from BaseImageDataset.
+    This class is specifically designed to work with image data in the Diffusion CodeBase format.
+    """
+
+    def __init__(self, dataset_path: str, split: str = "train"):
+        super().__init__(dataset_path, split)
+        self.dataset = LeRobotDataset(dataset_path, split)
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        return self.process_item(item)  # Process the item as needed
+    def __len__(self) -> int:
+        return super().__len__()
 
 if __name__ == "__main__":
     # Test
