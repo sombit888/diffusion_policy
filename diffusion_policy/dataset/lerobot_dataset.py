@@ -38,8 +38,7 @@ from lerobot_utils import (
     load_info,
     np_column,
 )
-from base_dataset import BaseLowdimDataset,BaseImageDataset
-
+from diffusion_policy.dataset.base_dataset import BaseImageDataset
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
 CODEBASE_VERSION = "v1.6"
 
