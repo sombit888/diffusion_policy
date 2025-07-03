@@ -42,7 +42,7 @@ Todos:
 """
 
 
-class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
+class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
     include_keys = ["global_step", "epoch"]
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -81,6 +81,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 self.load_checkpoint(path=lastest_ckpt_path)
 
         # configure dataset
+        
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BaseImageDataset)

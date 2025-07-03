@@ -1,4 +1,4 @@
-_target_: diffusion_policy.workspace.train_diffusion_unet_hybrid_workspace.TrainDiffusionUnetHybridWorkspace
+_target_: diffusion_policy.workspace.train_diffusion_unet_hybrid_workspace_droid.TrainDiffusionUnetHybridWorkspaceDroid
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
