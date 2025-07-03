@@ -50,9 +50,11 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
 
         gpt_config = mingpt_model.GPTConfig(
             input_size=self.input_size,
-            vocab_size=self.vocab_size * (1 + self.action_dim)
-            if self.predict_offsets
-            else self.vocab_size,
+            vocab_size=(
+                self.vocab_size * (1 + self.action_dim)
+                if self.predict_offsets
+                else self.vocab_size
+            ),
             block_size=self.block_size,
             n_layer=n_layer,
             n_head=n_head,
@@ -112,9 +114,11 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
             # if soft targets, argmax is considered the target class
             selected_offsets = offsets[
                 torch.arange(offsets.size(0)),
-                target_latents.argmax(dim=-1).view(-1)
-                if is_soft_target
-                else target_latents.view(-1),
+                (
+                    target_latents.argmax(dim=-1).view(-1)
+                    if is_soft_target
+                    else target_latents.view(-1)
+                ),
             ]
             offset_loss = self.offset_loss_scale * F.mse_loss(
                 selected_offsets, target_offsets.view(-1, self.action_dim)
@@ -146,9 +150,7 @@ class MinGPT(latent_generator.AbstractLatentGenerator):
             else:
                 return logits, loss
 
-    def generate_latents(
-        self, obs_rep: torch.Tensor
-    ) -> torch.Tensor:
+    def generate_latents(self, obs_rep: torch.Tensor) -> torch.Tensor:
         batch, seq, embed = obs_rep.shape
 
         output, _ = self.model(obs_rep, None)

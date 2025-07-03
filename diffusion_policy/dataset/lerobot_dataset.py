@@ -22,7 +22,15 @@ import safetensors
 import torch
 from backports.strenum import StrEnum
 
-from barrel.pipes.vlams.data.robotics.hf.utils.lerobot_utils import (
+# from barrel.pipes.vlams.data.robotics.hf.utils.lerobot_utils import (
+#     filter_episode_metadata,
+#     load_episode_data_index,
+#     load_episode_metadata,
+#     load_hf_dataset,
+#     load_info,
+#     np_column,
+# )
+from lerobot_utils import (
     filter_episode_metadata,
     load_episode_data_index,
     load_episode_metadata,
@@ -46,11 +54,15 @@ CODEBASE_VERSION = "v1.6"
 class ReferenceFrame(StrEnum):
     # TODO: Inherit from enum.StrEnum in python 3.11
     """Indicates the frame w.r.t. which control values are expressed"""
-    ROBOT_BASE = 'robot_base'  # Translation / rotation expressed in robot base frame
-    WORLD = "world"  # Translation / rotation expressed in a world frame (not robot base)
-    END_EFFECTOR = "end_effector"  # Translation / rotation expressed in end-effector frame
+    ROBOT_BASE = "robot_base"  # Translation / rotation expressed in robot base frame
+    WORLD = (
+        "world"  # Translation / rotation expressed in a world frame (not robot base)
+    )
+    END_EFFECTOR = (
+        "end_effector"  # Translation / rotation expressed in end-effector frame
+    )
     CAMERA = "camera"  # Translation / rotation expressed in camera frame
-    UNKNOWN = 'unknown'
+    UNKNOWN = "unknown"
 
 
 class LeRobotDataset:
@@ -110,19 +122,23 @@ class LeRobotDataset:
         self.hf_dataset: datasets.Dataset = load_hf_dataset(dataset_path, split=split)
 
         # Make sure all episodes are contiguous and ordered in increasing order
-        if not are_values_increasing(self.np_column('episode_index')):
+        if not are_values_increasing(self.np_column("episode_index")):
             raise ValueError(f"Dataset {dataset_path} doesn't have contiguous episodes")
 
         # Load the episode metadata
         # TODO: Merge episode_metadata in the main dataset. Columns can be dropped if not needed
         episode_metadata = load_episode_metadata(dataset_path, split)
         if episode_metadata is None:
-            episode_metadata = datasets.Dataset.from_dict({'episode_index': np.arange(len(self.hf_dataset))})
+            episode_metadata = datasets.Dataset.from_dict(
+                {"episode_index": np.arange(len(self.hf_dataset))}
+            )
         self.episode_metadata = episode_metadata
 
         if split in ["train", "test"]:
             # Contains keys 'from' and 'to'
-            self.episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(dataset_path, split)
+            self.episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(
+                dataset_path, split
+            )
         else:
             self.episode_data_index = calculate_episode_data_index(self.hf_dataset)
 
@@ -148,11 +164,11 @@ class LeRobotDataset:
 
     @property
     def num_episodes(self) -> int:
-        return len(self.episode_data_index['from'])
+        return len(self.episode_data_index["from"])
 
     @property
     def episode_lengths(self) -> np.ndarray:
-        return self.episode_data_index['to'] - self.episode_data_index['from']
+        return self.episode_data_index["to"] - self.episode_data_index["from"]
 
     def np_column(self, column_name: str) -> np.ndarray:
         return np_column(self.hf_dataset, column_name)
@@ -172,7 +188,9 @@ class LeRobotDataset:
 
     def episode_index_from_index(self, index: int | np.ndarray) -> int | np.ndarray:
         assert 0 <= index < len(self), f"0 <= {index} < {len(self)} not true"
-        episode_index = np.searchsorted(self.episode_data_index['from'], index, side='right') - 1
+        episode_index = (
+            np.searchsorted(self.episode_data_index["from"], index, side="right") - 1
+        )
         return episode_index
 
     def __len__(self):
@@ -206,7 +224,9 @@ class LeRobotDataset:
         # Update the hf_dataset and the episode data index
         obj.hf_dataset = hf_dataset
         obj.episode_data_index = calculate_episode_data_index(hf_dataset)
-        obj.episode_metadata = filter_episode_metadata(hf_dataset, self.episode_metadata)
+        obj.episode_metadata = filter_episode_metadata(
+            hf_dataset, self.episode_metadata
+        )
 
         return obj
 
@@ -227,7 +247,7 @@ class LeRobotDataset:
             - `R_k` might be in different reference frame from `t_k`, e.g. `t_k` is expressed in end-effector
                 frame, but the XYZ axes are always fixed and in robot base frame (the most common case)
         """
-        return ReferenceFrame(self.info.get('control_reference_frame', 'unknown'))
+        return ReferenceFrame(self.info.get("control_reference_frame", "unknown"))
 
 
 def calculate_episode_data_index(hf_dataset: datasets.Dataset) -> Dict[str, np.ndarray]:
@@ -235,7 +255,7 @@ def calculate_episode_data_index(hf_dataset: datasets.Dataset) -> Dict[str, np.n
     Calculates episode boundaries for `hf_dataset` using 'episode_index' column.
     NOTE: Assumes 'episode_index' is unique. This can break if you concatenate two datasets together
     """
-    episode_ids = np_column(hf_dataset, 'episode_index')
+    episode_ids = np_column(hf_dataset, "episode_index")
 
     # np.unique returns the values in a sorted order, even if the source is not sorted. Thus, if
     # episode_ids isn't sorted, we need to apply np.unique twice to get indices w.r.t. original array.
@@ -250,7 +270,9 @@ def calculate_episode_data_index(hf_dataset: datasets.Dataset) -> Dict[str, np.n
     _, indices_of_first_frames, inverse_indices = np.unique(
         indices[inverse], return_index=True, return_inverse=True
     )
-    indices_of_last_frames = np.concatenate([indices_of_first_frames[1:], [len(hf_dataset)]])
+    indices_of_last_frames = np.concatenate(
+        [indices_of_first_frames[1:], [len(hf_dataset)]]
+    )
 
     if np.any(np.diff(inverse_indices) < 0):
         raise ValueError(
@@ -262,8 +284,8 @@ def calculate_episode_data_index(hf_dataset: datasets.Dataset) -> Dict[str, np.n
         )
 
     return {
-        'from': np.asarray(indices_of_first_frames, dtype=np.int64),
-        'to': np.asarray(indices_of_last_frames, dtype=np.int64),
+        "from": np.asarray(indices_of_first_frames, dtype=np.int64),
+        "to": np.asarray(indices_of_last_frames, dtype=np.int64),
     }
 
 
@@ -274,9 +296,9 @@ def are_values_increasing(values: np.ndarray) -> bool:
 def save_to_disk(dataset: LeRobotDataset, output_path: str) -> None:
     """Save the dataset to disk"""
 
-    split = 'train' if dataset.split.startswith('train') else 'test'
+    split = "train" if dataset.split.startswith("train") else "test"
     hf_output_path = os.path.join(output_path, split)
-    meta_data_path = os.path.join(output_path, 'meta_data')
+    meta_data_path = os.path.join(output_path, "meta_data")
 
     if os.path.exists(hf_output_path):
         raise FileExistsError(f"Output path {hf_output_path} already exists")
@@ -289,27 +311,29 @@ def save_to_disk(dataset: LeRobotDataset, output_path: str) -> None:
     dataset.hf_dataset.save_to_disk(hf_output_path)
 
     # Save the episode metadata dataset
-    if dataset.episode_metadata.column_names != ['episode_index']:
+    if dataset.episode_metadata.column_names != ["episode_index"]:
         dataset.episode_metadata.save_to_disk(
-            os.path.join(output_path, 'meta_data', split, 'episode_metadata')
+            os.path.join(output_path, "meta_data", split, "episode_metadata")
         )
 
     # Save the info
-    with open(os.path.join(meta_data_path, 'info.json'), 'w') as f:
+    with open(os.path.join(meta_data_path, "info.json"), "w") as f:
         json.dump(dataset.info, f)
 
     # Save the episode data index
-    episode_data_index = {key: torch.tensor(value) for key, value in dataset.episode_data_index.items()}
+    episode_data_index = {
+        key: torch.tensor(value) for key, value in dataset.episode_data_index.items()
+    }
     safetensors.torch.save_file(
-        episode_data_index, os.path.join(meta_data_path, split, 'episode_data_index.safetensors')
+        episode_data_index,
+        os.path.join(meta_data_path, split, "episode_data_index.safetensors"),
     )
+
 
 if __name__ == "__main__":
     # Test
     breakpoint()
-    dataset = LeRobotDataset(
-        "/work/sombit_dey/insait_droid/insait_droid/"
-    )
-    
+    dataset = LeRobotDataset("/work/sombit_dey/insait_droid/insait_droid/")
+
     print(dataset)
     print(dataset[0])

@@ -11,8 +11,8 @@ from safetensors.torch import load_file
 
 
 def strip_split(split: str) -> str:
-    if '[' in split:
-        split, _ = split.split('[', 1)
+    if "[" in split:
+        split, _ = split.split("[", 1)
     return split
 
 
@@ -30,15 +30,15 @@ def _slice_value_to_episode_index(value: str, num_episodes: int, side: str) -> i
     Returns:
         Non-negative episode index
     """
-    assert side in ['left', 'right']
+    assert side in ["left", "right"]
 
-    if value == '':
-        if side == 'left':
+    if value == "":
+        if side == "left":
             return 0
         return num_episodes
 
-    if '%' in value:
-        percent = float(value.replace('%', ''))
+    if "%" in value:
+        percent = float(value.replace("%", ""))
         assert 100 >= percent >= 0, percent
         episode_index = round(percent / 100 * num_episodes)
     else:
@@ -53,21 +53,25 @@ def _slice_value_to_episode_index(value: str, num_episodes: int, side: str) -> i
     episode_index = np.clip(episode_index, 0, num_episodes)
 
     # If the slice is on the left and corresponds to 0% of the dataset, raise error
-    if (side == 'right' and episode_index == 0) or (side == 'left' and episode_index == num_episodes):
+    if (side == "right" and episode_index == 0) or (
+        side == "left" and episode_index == num_episodes
+    ):
         raise ValueError("Slice results in empty dataset")
 
     return episode_index
 
 
 def episode_range_from_split(dataset_path: str, split: str) -> Tuple[int, int]:
-    if '[' in split:
-        split, slices = split.split('[', 1)
+    if "[" in split:
+        split, slices = split.split("[", 1)
         slices = f"[{slices}"
     else:
-        slices = ''
+        slices = ""
 
-    episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(dataset_path, split)
-    num_episodes = len(episode_data_index['from'])
+    episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(
+        dataset_path, split
+    )
+    num_episodes = len(episode_data_index["from"])
 
     if slices:
         # Regex that extracts start and end slice as strings. Includes % if present
@@ -77,16 +81,22 @@ def episode_range_from_split(dataset_path: str, split: str) -> Tuple[int, int]:
 
         match_low, match_high = matches.groups()
 
-        if match_low != '' and match_high != '':
-            if ('%' in match_low) != ('%' in match_high):
+        if match_low != "" and match_high != "":
+            if ("%" in match_low) != ("%" in match_high):
                 raise ValueError(
                     f"Both start and end positions must be in % or not, but got {match_low}, {match_high}"
                 )
-            if float(match_low.replace('%', '')) >= float(match_high.replace('%', '')):
-                raise ValueError(f"Start position {match_low} must be < end position {match_high}")
+            if float(match_low.replace("%", "")) >= float(match_high.replace("%", "")):
+                raise ValueError(
+                    f"Start position {match_low} must be < end position {match_high}"
+                )
 
-        episode_low = _slice_value_to_episode_index(match_low, num_episodes, side='left')
-        episode_high = _slice_value_to_episode_index(match_high, num_episodes, side='right')
+        episode_low = _slice_value_to_episode_index(
+            match_low, num_episodes, side="left"
+        )
+        episode_high = _slice_value_to_episode_index(
+            match_high, num_episodes, side="right"
+        )
     else:
         episode_low = 0
         episode_high = num_episodes
@@ -111,22 +121,27 @@ def load_hf_dataset(dataset_path: str, split: str) -> datasets.Dataset:
     split, slice_split = strip_split(split), split
 
     if os.path.exists(dataset_path):
-        assert os.path.exists(split_path := os.path.join(dataset_path, split)), f"{split_path} doesn't exist"
+        assert os.path.exists(
+            split_path := os.path.join(dataset_path, split)
+        ), f"{split_path} doesn't exist"
         hf_dataset = datasets.load_from_disk(split_path)
     else:
         hf_dataset = datasets.load_dataset(dataset_path, split=split)
 
     # Apply slicing
     if split != slice_split:
-        split, slices = slice_split.split('[', 1)
+        split, slices = slice_split.split("[", 1)
         slices = f"[{slices}"
 
         episode_low, episode_high = episode_range_from_split(dataset_path, slice_split)
 
-        episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(dataset_path, slice_split)
+        episode_data_index: Dict[str, np.ndarray] = load_episode_data_index(
+            dataset_path, slice_split
+        )
 
         indices = np.arange(
-            episode_data_index['from'][episode_low], episode_data_index['to'][episode_high - 1]
+            episode_data_index["from"][episode_low],
+            episode_data_index["to"][episode_high - 1],
         )
         hf_dataset = hf_dataset.select(indices)
 
@@ -147,17 +162,24 @@ def load_episode_data_index(dataset_path: str, split: str) -> Dict[str, np.ndarr
     split = strip_split(split)
 
     if os.path.exists(dataset_path):
-        path = os.path.join(dataset_path, "meta_data", split, "episode_data_index.safetensors")
+        path = os.path.join(
+            dataset_path, "meta_data", split, "episode_data_index.safetensors"
+        )
     else:
         path = hf_hub_download(
-            dataset_path, f"meta_data/{split}/episode_data_index.safetensors", repo_type="dataset"
+            dataset_path,
+            f"meta_data/{split}/episode_data_index.safetensors",
+            repo_type="dataset",
         )
 
     assert os.path.exists(path), f"File {path} doesn't exist"
 
     episode_data_index = load_file(path)
 
-    return {'from': episode_data_index['from'].numpy(), 'to': episode_data_index['to'].numpy()}
+    return {
+        "from": episode_data_index["from"].numpy(),
+        "to": episode_data_index["to"].numpy(),
+    }
 
 
 def load_info(dataset_path: str) -> Dict[str, Any]:
@@ -188,7 +210,9 @@ def load_episode_metadata(dataset_path: str, split: str) -> datasets.Dataset:
         The loaded and optionally filtered dataset of episode metadata
     """
 
-    load_path = os.path.join(dataset_path, "meta_data", strip_split(split), "episode_metadata")
+    load_path = os.path.join(
+        dataset_path, "meta_data", strip_split(split), "episode_metadata"
+    )
 
     if os.path.exists(dataset_path) and os.path.exists(load_path):
         episode_metadata_dataset = datasets.load_from_disk(load_path)
@@ -211,8 +235,8 @@ def filter_episode_metadata(
     """
     Filter episode_metadata such that it contains only episodes present in hf_dataset
     """
-    episode_ids = np.unique(np_column(hf_dataset, 'episode_index'))
-    metadata_episode_ids = np_column(episode_metadata, 'episode_index')
+    episode_ids = np.unique(np_column(hf_dataset, "episode_index"))
+    metadata_episode_ids = np_column(episode_metadata, "episode_index")
 
     mask = np.isin(metadata_episode_ids, episode_ids)
     indices = np.arange(len(metadata_episode_ids))[mask]
@@ -229,17 +253,19 @@ def np_column(hf_dataset: datasets.Dataset, column_name: str) -> np.ndarray:
 
     # If the dataset is a subset of the PyArrow table, filter the output of the column
     if hf_dataset._indices is not None:  # noqa: SLF001
-        indices = hf_dataset._indices.column('indices').to_numpy()  # noqa: SLF001
+        indices = hf_dataset._indices.column("indices").to_numpy()  # noqa: SLF001
         column = column[indices]
     # If the column is array of arrays, make it a single multidimensional array
-    if column.dtype == np.dtype('O'):
+    if column.dtype == np.dtype("O"):
         column = np.vstack(column)
 
     assert len(column) == len(hf_dataset), f"{len(column)} != {len(hf_dataset)}"
     return column
 
 
-def add_columns(hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]) -> datasets.Dataset:
+def add_columns(
+    hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]
+) -> datasets.Dataset:
     """
     Add new columns to hf_dataset in an optimized way. Specifically, whenever a `datasets.Dataset` has
     been 'indexed', e.g. by calling `datasets.Dataset.select`, it creates an internal index mapping. If
@@ -257,14 +283,14 @@ def add_columns(hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]) ->
 
     # If `hf_dataset` hasn't been 'indexed' yet, use simply create a new datasets.Dataset and
     # concatenate the dataset objects
-    indices_table: datasets.table.Table = getattr(hf_dataset, '_indices', None)
+    indices_table: datasets.table.Table = getattr(hf_dataset, "_indices", None)
     if indices_table is None:
         columns_dataset = datasets.Dataset.from_dict(columns)
         return datasets.concatenate_datasets([hf_dataset, columns_dataset], axis=1)
 
     # `hf_dataset` has been 'indexed' -> we need to be smart and add to the pyarrow table directly
     hf_dataset_table: datasets.table.Table = hf_dataset.data
-    indices = indices_table.column('indices').to_numpy()
+    indices = indices_table.column("indices").to_numpy()
 
     # Get the size of the original 'unindexed' dataset contained in `hf_dataset_table`
     expaneded_size = len(hf_dataset_table)
@@ -275,9 +301,13 @@ def add_columns(hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]) ->
     expanded_columns = {}
     for column_name, column in columns.items():
         if len(indices) != len(column):
-            raise ValueError(f"Column {column_name} with size {len(column)} != {len(indices)}")
+            raise ValueError(
+                f"Column {column_name} with size {len(column)} != {len(indices)}"
+            )
 
-        expanded_column = np.zeros((expaneded_size,) + column.shape[1:], dtype=column.dtype)
+        expanded_column = np.zeros(
+            (expaneded_size,) + column.shape[1:], dtype=column.dtype
+        )
         expanded_column[indices] = column
         expanded_columns[column_name] = expanded_column
 
@@ -292,7 +322,9 @@ def add_columns(hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]) ->
         features=datasets.Features({**hf_dataset.features, **columns_dataset.features}),
     )
     fingerprint = datasets.fingerprint.update_fingerprint(
-        "".join([hf_dataset._fingerprint, columns_dataset._fingerprint]),  # noqa: SLF001
+        "".join(
+            [hf_dataset._fingerprint, columns_dataset._fingerprint]
+        ),  # noqa: SLF001
         add_columns,
         {"info": info},
     )
@@ -300,11 +332,15 @@ def add_columns(hf_dataset: datasets.Dataset, columns: Dict[str, np.ndarray]) ->
     # Concatenate the tables for `hf_dataset` and `columns_dataset` and directly apply the indexing
     # by providing `indices_table`
     hf_dataset = datasets.Dataset(
-        arrow_table=datasets.table.concat_tables([hf_dataset_table, expanded_columns_table], axis=1),
+        arrow_table=datasets.table.concat_tables(
+            [hf_dataset_table, expanded_columns_table], axis=1
+        ),
         indices_table=indices_table,
         info=datasets.DatasetInfo(
             # IMPORTANT: Need to pass Features, otherwise Images end up being decoded
-            features=datasets.Features({**hf_dataset.features, **columns_dataset.features}),
+            features=datasets.Features(
+                {**hf_dataset.features, **columns_dataset.features}
+            ),
         ),
         # IMPORTANT: Need to pass fingerprint, otherwise ends up computing a hash of the data inside
         # the table, which means loading the enitre dataset and likely running OOM

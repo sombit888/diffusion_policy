@@ -1,4 +1,5 @@
 """Environments using kitchen and Franka robot."""
+
 from gym.envs.registration import register
 
 register(
