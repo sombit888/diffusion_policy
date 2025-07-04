@@ -30,7 +30,7 @@ from backports.strenum import StrEnum
 #     load_info,
 #     np_column,
 # )
-from lerobot_utils import (
+from diffusion_policy.dataset.lerobot_utils import (
     filter_episode_metadata,
     load_episode_data_index,
     load_episode_metadata,
@@ -349,6 +349,7 @@ if __name__ == "__main__":
     # Test
     breakpoint()
     dataset = LeRobotDataset("/work/sombit_dey/insait_droid/insait_droid/")
-
+    
     print(dataset)
     print(dataset[0])
+    dataset = LeRobotDatasetDiffusion("/work/sombit_dey/insait_droid/insait_droid/")
