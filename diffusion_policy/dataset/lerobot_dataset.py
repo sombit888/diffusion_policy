@@ -336,7 +336,7 @@ class LeRobotDatasetDiffusion(BaseImageDataset):
     """
 
     def __init__(self, dataset_path: str, split: str = "train"):
-        super().__init__(dataset_path, split)
+        super().__init__()
         self.dataset = LeRobotDataset(dataset_path, split)
 
     def __getitem__(self, idx):
