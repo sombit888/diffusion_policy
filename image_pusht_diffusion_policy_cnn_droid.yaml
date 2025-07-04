@@ -1,4 +1,4 @@
-_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_droid.TrainDiffusionUnetImageWorkspaceDroid
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_droid_workspace.TrainDiffusionUnetImageWorkspaceDroid
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
