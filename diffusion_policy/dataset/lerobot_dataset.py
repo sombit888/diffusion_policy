@@ -17,11 +17,14 @@ import os
 from typing import Any, Dict, Union
 
 import datasets
+
 import numpy as np
-import safetensors
+import safetensors.torch
 import torch
 from backports.strenum import StrEnum
-
+from torchvision import transforms
+from dataclasses import dataclass
+from PIL import Image
 # from barrel.pipes.vlams.data.robotics.hf.utils.lerobot_utils import (
 #     filter_episode_metadata,
 #     load_episode_data_index,
@@ -38,6 +41,7 @@ from diffusion_policy.dataset.lerobot_utils import (
     load_info,
     np_column,
 )
+from diffusion_policy.dataset.filter import add_target_joint_position,filter_episodes
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
 CODEBASE_VERSION = "v1.6"
@@ -63,6 +67,67 @@ class ReferenceFrame(StrEnum):
     )
     CAMERA = "camera"  # Translation / rotation expressed in camera frame
     UNKNOWN = "unknown"
+@dataclass
+class EpisodeMetadata():
+    """
+    Packs episodes metadata for a given dataframe. Example:
+        episode_ids: [1, 1, 1, 2, 2, 0, 0, 0, 0, 4, 4]
+        indices_of_first_frames: [0, 3, 5, 9]
+        indices_of_last_frames: [2, 4, 8, 10]
+        inverse_indices: [0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 3]
+    """
+
+    episode_ids: np.ndarray  # Unique episode ids in the order they appear in the dataframe
+    indices_of_first_frames: np.ndarray  # First indices of the episode ids in the dataframe
+    indices_of_last_frames: np.ndarray  # Last indices of the episode ids. These are **including**
+    inverse_indices: np.ndarray  # Array of indices that reconstructs the episode id array in the dataframe
+
+
+def extract_episode_metadata(episode_ids: np.ndarray) -> EpisodeMetadata:
+    # Note that np.unique returns the values in a sorted order, even if the source is not sorted
+
+    # np.unique returns the values in a sorted order, even if the source is not sorted. Thus, if
+    # episode_ids isn't sorted, we need to apply np.unique twice to get indices w.r.t. original array.
+    # Example:
+    #   episode_ids: [1, 1, 1, 2, 2, 0, 0, 0, 0, 4, 4]
+    #   indices: [5, 0, 3, 9]
+    #   inverse: [1, 1, 1, 2, 2, 0, 0, 0, 0, 3, 3]
+    #   indices_of_first_frames: [0, 3, 5, 9]
+    #   inverse_indices: [0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 3]
+
+    _, indices, inverse = np.unique(episode_ids, return_index=True, return_inverse=True)
+
+    # Re-adjust such that the order matches the order in the source
+    _, indices_of_first_frames, inverse_indices, counts = np.unique(
+        indices[inverse], return_index=True, return_inverse=True, return_counts=True
+    )
+
+    _assert_episodes_are_contiguous(inverse_indices, episode_ids)
+
+    indices_of_last_frames = indices_of_first_frames + counts - 1
+
+    episode_ids = episode_ids[indices_of_first_frames]
+
+    return EpisodeMetadata(
+        episode_ids=episode_ids,
+        indices_of_first_frames=indices_of_first_frames,
+        indices_of_last_frames=indices_of_last_frames,
+        inverse_indices=inverse_indices,
+    )
+
+def _assert_episodes_are_contiguous(inverse_indices: np.ndarray, episode_ids: np.ndarray):
+    if np.any((diff := np.diff(inverse_indices)) < 0):
+        offending_indices = np.where(diff < 0)[0] + 1
+        offending_episode_ids = np.unique(episode_ids[offending_indices])
+
+        with np.printoptions(threshold=np.iinfo(np.int32).max):
+            raise ValueError(
+                f"Episodes not contiguoues in the dataframe. Likely, separate dataframes have been "
+                f"concatenated and episodes from different dataframes got the same episode id. "
+                f"Offending episode_ids: {offending_episode_ids.size} / {np.unique(episode_ids).size}"
+                f"\n{offending_episode_ids}"
+            )
+
 
 
 class LeRobotDataset:
@@ -250,6 +315,7 @@ class LeRobotDataset:
         return ReferenceFrame(self.info.get("control_reference_frame", "unknown"))
 
 
+
 def calculate_episode_data_index(hf_dataset: datasets.Dataset) -> Dict[str, np.ndarray]:
     """
     Calculates episode boundaries for `hf_dataset` using 'episode_index' column.
@@ -329,27 +395,169 @@ def save_to_disk(dataset: LeRobotDataset, output_path: str) -> None:
         os.path.join(meta_data_path, split, "episode_data_index.safetensors"),
     )
 
-class LeRobotDatasetDiffusion(BaseImageDataset):
+
+class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
     """
     A dataset class for LeRobotDataset that inherits from BaseImageDataset.
     This class is specifically designed to work with image data in the Diffusion CodeBase format.
     """
 
     def __init__(self, dataset_path: str, split: str = "train"):
-        super().__init__()
-        self.dataset = LeRobotDataset(dataset_path, split)
+        super().__init__(dataset_path=dataset_path, split=split)
+        self.keys_to_add = [
+                'observation.robot_state.cartesian_position',
+                'observation.robot_state.gripper_position',
+                'observation.robot_state.joint_positions',
+                'observation.robot_state.joint_velocities',
+                'action.cartesian_position',
+                'action.cartesian_velocity',
+                'action.gripper_position',
+                'action.gripper_velocity',
+                'action.joint_position',
+                'action.joint_velocity',
+                'action.robot_state.cartesian_position',
+                'action.robot_state.gripper_position',
+                'action.joint_position',
+                'action.robot_state.joint_velocities',
+                'action.target_cartesian_position',
+                'action.target_gripper_position',
+                'action.target.joint_position'
+                'task',
+                'episode_id',
+                'observation.images.main',
+                'observation.images.secondary',
+                
+                # 'observation.images.wrist_camera',
+                # 'observation.timestamp.cameras.main',
+                # 'observation.timestamp.cameras.secondary',
+                # 'observation.timestamp.cameras.wrist_camera',
+                # 'observation.has_wrist',
+                # 'timestamp',
+                'episode_index',
+                'frame_index',
+                'index'
+            ]
+        self.img_keys = [
+            'observation.images.main',
+            'observation.images.secondary',
+            # 'observation.images.wrist_camera',
+        ]        
+        self.to_tensor = transforms.ToTensor()
+        # breakpoint()
+        # self._add_target_keys(horizon=5)  # Add target keys with horizon of 5
+        # breakpoint()
+    # def _add_target_keys(self, horizon: int = 5):
+    #     """
+    #     Efficiently add 'action.target.joint_position' targets with next `horizon`
+    #     steps of joint positions for each sample, staying within the same episode.
+    #     """
+    #     data = self.hf_dataset
 
+    #     # Preload relevant columns as NumPy arrays
+    #     episode_indices = np.array(self.dataset.np_column("episode_index"))
+    #     joint_positions = np.array(self.dataset.np_column("action.joint_position"))
+    #     gripper_positions = np.array(self.dataset.np_column("action.gripper_position"))
+    #     # Allocate output array
+    #     num_samples, joint_dim = joint_positions.shape
+    #     gripper_dim = gripper_positions.shape[1] if gripper_positions.ndim > 1 else 1
+    #     targets = np.zeros((num_samples, horizon, joint_dim+gripper_dim), dtype=joint_positions.dtype)
+
+    #     for i in range(num_samples):
+    #         ep_id = episode_indices[i]
+    #         count = 0
+    #         for j in range(1, horizon + 1):
+    #             idx = i + j
+    #             if idx >= num_samples or episode_indices[idx] != ep_id:
+    #                 break
+    #             targets[i, count,:joint_dim] = joint_positions[idx]
+    #             targets[i, count,joint_dim:] = gripper_positions[idx]
+    #             count += 1
+
+    #         # If not enough future steps, pad with last valid future (or current)
+    #         while count < horizon:
+    #             targets[i, count,:joint_dim] = targets[i, count - 1,:joint_dim] if count > 0 else joint_positions[i]
+    #             targets[i, count,joint_dim:] = targets[i, count - 1,joint_dim:] if count > 0 else gripper_positions[i]
+    #             count += 1
+
+    #     # Add new column to dataset
+    #     targets_list = targets.tolist()
+    #     self.dataset.hf_dataset = self.dataset.hf_dataset.add_column(
+    #         "action.target.joint_position", targets_list
+    #     )
+    #     string_to_be_included = ['close']   
+    #     # filter dataset with episodes wit h 'close' in task
+    #     breakpoint()
+    #     self.hf_dataset = self.hf_dataset.filter(
+    #         lambda x: any(task in x['task'] for task in string_to_be_included)
+    #         )
+    
+    #     breakpoint()
     def __getitem__(self, idx):
-        item = self.dataset[idx]
-        return self.process_item(item)  # Process the item as needed
-    def __len__(self) -> int:
-        return super().__len__()
+        item = self.hf_dataset[idx]
+        for key in list(item.keys()):
+            if key in self.keys_to_add:
+                if key in self.img_keys:
+                    item[key] = self.to_tensor(np.array(item[key]))
+                elif key not in item:
+                    # If the key is not present, we can add a default value
+                    # Here we assume the default value is None, but it can be changed based on requirements
+                    item[key] = None
+                else:
+                    # If the key is present, we can convert it to a tensor if it's not already
+                    if isinstance(item[key], np.ndarray):
+                        item[key] = torch.tensor(item[key])
+                    elif isinstance(item[key], list):
+                        item[key] = torch.tensor(np.array(item[key]))
+            else:
+                # If the key is not in keys_to_add, we can remove it from the item
+                del item[key]
+        
+        return item
 
+def load_processed_open_dataset( dataset, 
+                                 drop_columns: list = ['observation.images.wrist_camera'], 
+                                 horizon: int = 5):
+    # Load base dataset
+
+    # Create open-task mask
+    task_list = dataset.hf_dataset[dataset.episode_data_index['from']]['task']
+    open_episode_mask = np.array(["open" in task for task in task_list])
+
+    # Filter for "open" episodes
+    dataset_open = filter_episodes(dataset=dataset, episodes_mask=open_episode_mask)
+
+    # Drop unused columns
+    if drop_columns:
+        dataset_open.hf_dataset = dataset_open.hf_dataset.remove_columns(drop_columns)
+
+    # Add future action targets
+    add_target_joint_position(dataset_open, horizon=horizon)
+
+    return dataset_open
 if __name__ == "__main__":
     # Test
-    breakpoint()
-    dataset = LeRobotDataset("/work/sombit_dey/insait_droid/insait_droid/")
     
-    print(dataset)
-    print(dataset[0])
-    dataset = LeRobotDatasetDiffusion("/work/sombit_dey/insait_droid/insait_droid/")
+    # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
+    # open_episode_mask =  ["open" in task for task in dataset.hf_dataset[dataset.episode_data_index['from']]['episode_index']]
+    # dataset_open = filter_episodes(dataset, episode_mask=open_episode_mask) 
+    # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
+    # open_episode_mask =  ["open" in task for task in dataset.hf_dataset[dataset.episode_data_index['from']]['task']]
+    # dataset_open = filter_episodes(dataset=dataset, 
+    #                                episodes_mask=np.array(open_episode_mask))
+    # # delete the orig dataset 
+    # del dataset 
+    # breakpoint()
+    # # print columns
+    # print(dataset_open.hf_dataset.column_names)
+    # drop_columns= [ 'observation.images.wrist_camera']
+    # dataset_open.hf_dataset = dataset_open.hf_dataset.remove_columns(
+    #             drop_columns)
+    # # print columns after removing wrist camera
+    # print(dataset_open.hf_dataset.column_names)    
+
+    # filter columns , remove wrist camera      
+    # add_target_joint_position(dataset_open, horizon=5)
+    dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
+    dataset_open = load_processed_open_dataset(dataset, 
+                                               drop_columns=['observation.images.wrist_camera'],
+                                               horizon=5)

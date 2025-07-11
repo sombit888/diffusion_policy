@@ -35,6 +35,7 @@ logging:
   - train_diffusion_unet_hybrid
   - pusht_image
   - default
+  wandb: null
 multi_run:
   run_dir: data/outputs/2023.01.16/20.20.06_train_diffusion_unet_hybrid_pusht_image
   wandb_name_base: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_pusht_image
@@ -114,15 +115,15 @@ shape_meta:
 task:
   dataset:
     _target_: diffusion_policy.dataset.lerobot_dataset.LeRobotDatasetDiffusion
-    dataset_path: /work/sombit_dey/insait_droid/insait_droid/
+    dataset_path: /scratch/sombit_dey/insait_droid/insait_droid/
     split: train
-    horizon: 16
-    max_train_episodes: 90
-    pad_after: 7
-    pad_before: 1
-    seed: 42
-    val_ratio: 0.02
-    zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
+    # horizon: 16
+    # max_train_episodes: 90
+    # pad_after: 7
+    # pad_before: 1
+    # seed: 42
+    # val_ratio: 0.02
+    # zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
   env_runner:
     _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
     fps: 10
@@ -176,6 +177,7 @@ training:
   tqdm_interval_sec: 1.0
   use_ema: true
   val_every: 1
+  freeze_encoder: false
 val_dataloader:
   batch_size: 64
   num_workers: 8
