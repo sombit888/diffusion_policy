@@ -17,6 +17,7 @@ import numpy as np
 from diffusion_policy.dataset.lerobot_utils import add_columns
 from tqdm import tqdm
 
+
 def np_unique(
     data: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -125,9 +126,7 @@ def np_ranges(lows: np.ndarray, highs: np.ndarray) -> np.ndarray:
     return output
 
 
-def filter_episodes_with_frames(
-    dataset, frame_mask: np.ndarray
-) :
+def filter_episodes_with_frames(dataset, frame_mask: np.ndarray):
     """
     Filter dataset at episode level. Any episode which contains a value which should be filtered is
     entirely removed (rather than removing just a single entry from the episode)
@@ -163,9 +162,7 @@ def filter_episodes_with_frames(
     return select_dataset_episodes_by_index(dataset, episode_indices)
 
 
-def filter_episodes(
-    dataset, episodes_mask: np.ndarray
-) :
+def filter_episodes(dataset, episodes_mask: np.ndarray):
     """
     Remove episodes from dataset.
     Args:
@@ -180,13 +177,13 @@ def filter_episodes(
             f"Can't apply mask of size {len(episodes_mask)} to dataset with {dataset.num_episodes} episodes"
         )
     episode_indices = np.arange(dataset.num_episodes)
-    dataset = select_dataset_episodes_by_index(dataset, episode_indices[episodes_mask])
-    return dataset
+    filtered_dataset = select_dataset_episodes_by_index(dataset, episode_indices)
+
+    # Re-wrap with original dataset class if needed
+    return dataset.__class__(**filtered_dataset._init_args)
 
 
-def select_dataset_episodes_by_index(
-    dataset, episode_indices: np.ndarray
-) :
+def select_dataset_episodes_by_index(dataset, episode_indices: np.ndarray):
     """
     Cut `dataset` by selecting only episodes in `episode_indices`
     Args:
@@ -203,7 +200,7 @@ def select_dataset_episodes_by_index(
 
 def select_dataset_episodes_by_id(
     dataset, episode_ids: np.ndarray, invert: bool = False
-) :
+):
     """
     Cut `dataset` by selecting episodes according to their ids. Checks the `episode_index` column,
     which corresponds to the episode id. NOTE: an index in `dataset.episode_data_index['from']` is
@@ -280,12 +277,17 @@ def select_hf_dataset_episodes(
     return hf_dataset
 
 
-def add_target_joint_position(dataset, horizon=5):
+def add_target_joint_position(dataset, horizon=5,from_observation=True):
+    
+    
     # Load necessary arrays once
     episode_indices = np.array(dataset.np_column("episode_index"))
-    joint_pos = np.array(dataset.np_column("action.joint_position"))
-    gripper_pos = np.array(dataset.np_column("action.gripper_position"))
-
+    if not from_observation:
+        joint_pos = np.array(dataset.np_column("action.joint_position"))
+        gripper_pos = np.array(dataset.np_column("action.gripper_position"))
+    else:
+        joint_pos = np.array(dataset.np_column("observation.robot_state.joint_positions"))
+        gripper_pos = np.array(dataset.np_column("observation.robot_state.gripper_position"))
     num_samples = joint_pos.shape[0]
     joint_dim = joint_pos.shape[1]
     gripper_pos = gripper_pos.reshape(num_samples, -1)  # Ensure 2D
@@ -295,7 +297,9 @@ def add_target_joint_position(dataset, horizon=5):
     action_array = np.concatenate([joint_pos, gripper_pos], axis=1)
 
     # Prepare output
-    targets = np.zeros((num_samples, horizon, joint_dim + gripper_dim), dtype=action_array.dtype)
+    targets = np.zeros(
+        (num_samples, horizon, joint_dim + gripper_dim), dtype=action_array.dtype
+    )
 
     # Process episode by episode for clean slicing
     unique_episodes = np.unique(episode_indices)
@@ -307,7 +311,7 @@ def add_target_joint_position(dataset, horizon=5):
         for i in range(ep_len):
             # Grab up to horizon future actions
             end = min(i + horizon + 1, ep_len)
-            seq = ep_actions[i+1:end]
+            seq = ep_actions[i + 1 : end]
 
             # If not enough future, pad with last valid or current
             if len(seq) < horizon:
@@ -318,13 +322,67 @@ def add_target_joint_position(dataset, horizon=5):
                 seq = np.concatenate([seq, pad], axis=0)
 
             targets[idxs[i]] = seq[:horizon]
+    
+    # Add to dataset
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.joint_position", targets.tolist()
+    )
+
+def add_target_joint_delta(dataset, horizon=5, from_observation=True):
+    # Load necessary arrays once
+    episode_indices = np.array(dataset.np_column("episode_index"))
+    if not from_observation:
+        joint_pos = np.array(dataset.np_column("action.joint_position"))
+        gripper_pos = np.array(dataset.np_column("action.gripper_position"))
+    else:
+        joint_pos = np.array(dataset.np_column("observation.robot_state.joint_positions"))
+        gripper_pos = np.array(dataset.np_column("observation.robot_state.gripper_position"))
+
+    num_samples = joint_pos.shape[0]
+    joint_dim = joint_pos.shape[1]
+    gripper_pos = gripper_pos.reshape(num_samples, -1)  # Ensure 2D
+    gripper_dim = gripper_pos.shape[1]
+
+    # Combine joint and gripper into a single array
+    action_array = np.concatenate([joint_pos, gripper_pos], axis=1)
+
+    # Prepare output for deltas
+    targets = np.zeros(
+        (num_samples, horizon, joint_dim + gripper_dim), dtype=action_array.dtype
+    )
+
+    # Process episode by episode for clean slicing
+    unique_episodes = np.unique(episode_indices)
+    for ep in tqdm(unique_episodes, desc="Computing target deltas"):
+        idxs = np.where(episode_indices == ep)[0]
+        ep_actions = action_array[idxs]
+        ep_len = len(idxs)
+
+        for i in range(ep_len):
+            # Current action
+            current_action = ep_actions[i]
+
+            # Grab up to horizon future actions
+            end = min(i + horizon + 1, ep_len)
+            seq = ep_actions[i + 1 : end]
+
+            # If not enough future, pad with last valid or current
+            if len(seq) < horizon:
+                if len(seq) > 0:
+                    pad = np.repeat(seq[-1][np.newaxis, :], horizon - len(seq), axis=0)
+                else:
+                    pad = np.repeat(current_action[np.newaxis, :], horizon, axis=0)
+                seq = np.concatenate([seq, pad], axis=0)
+
+            # Compute deltas: future_action - current_action
+            deltas = seq[:horizon] - current_action
+            targets[idxs[i]] = deltas
 
     # Add to dataset
-    dataset.hf_dataset = dataset.hf_dataset.add_column("action.target.joint_position", targets.tolist())
-
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.joint_position_delta", targets.tolist()
+    )
 
 if __name__ == "__main__":
     # Test
-    pass 
-
-   
+    pass

@@ -9,11 +9,11 @@ checkpoint:
     monitor_key: test_mean_score
 dataloader:
   batch_size: 64
-  num_workers: 8
-  persistent_workers: false
+  num_workers: 16
+  persistent_workers: true
   pin_memory: true
   shuffle: true
-dataset_obs_steps: 2
+dataset_obs_steps: 1
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
   inv_gamma: 1.0
@@ -22,26 +22,26 @@ ema:
   power: 0.75
   update_after_step: 0
 exp_name: default
-horizon: 16
+horizon: 4
 keypoint_visible_rate: 1.0
 logging:
   group: null
   id: null
   mode: online
-  name: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_pusht_image
-  project: diffusion_policy_debug
+  name: droid_joint_position_delta_image_pose
+  project: diffusion_policy_droid
   resume: true
   tags:
   - train_diffusion_unet_hybrid
-  - pusht_image
+  - droid
   - default
-  wandb: null
+wandb: null
 multi_run:
-  run_dir: data/outputs/2023.01.16/20.20.06_train_diffusion_unet_hybrid_pusht_image
+  run_dir: /scratch/sombit_dey/data/outputs/2023.01.16/20.20.06_train_diffusion_unet_hybrid_pusht_image
   wandb_name_base: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_pusht_image
-n_action_steps: 8
+n_action_steps: 4
 n_latency_steps: 0
-n_obs_steps: 2
+n_obs_steps: 1
 name: train_diffusion_unet_hybrid
 obs_as_global_cond: true
 optimizer:
@@ -54,7 +54,7 @@ optimizer:
   weight_decay: 1.0e-06
 past_action_visible: false
 policy:
-  _target_: diffusion_policy.policy.diffusion_unet_hybrid_image_policy.DiffusionUnetHybridImagePolicy
+  _target_: diffusion_policy.policy.diffusion_unet_hybrid_droid_image_policy.DiffusionUnetHybridImagePolicyDroid
   cond_predict_scale: true
   crop_shape:
   - 84
@@ -65,11 +65,11 @@ policy:
   - 1024
   - 2048
   eval_fixed_crop: true
-  horizon: 16
+  horizon: 4
   kernel_size: 5
-  n_action_steps: 8
+  n_action_steps: 4
   n_groups: 8
-  n_obs_steps: 2
+  n_obs_steps: 1
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
     beta_end: 0.02
@@ -85,18 +85,30 @@ policy:
   shape_meta:
     action:
       shape:
-      - 2
+      - 8
     obs:
       agent_pos:
         shape:
-        - 2
+        - 8
         type: low_dim
-      image:
+      image_main:
         shape:
         - 3
-        - 96
-        - 96
+        - 480
+        - 640
         type: rgb
+      image_secondary:
+        shape:
+        - 3
+        - 480
+        - 640
+        type: rgb
+      # observation.images.secondary:
+      #   shape:
+      #   - 3
+      #   - 480
+      #   - 640
+      #   type: rgb
 shape_meta:
   action:
     shape:
@@ -109,8 +121,8 @@ shape_meta:
     image:
       shape:
       - 3
-      - 96
-      - 96
+      - 480
+      - 640
       type: rgb
 task:
   dataset:

@@ -1,4 +1,5 @@
 from typing import Dict
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,39 +10,136 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
-from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
-from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.common.robomimic_config_util import get_robomimic_config
+from robomimic.algo import algo_factory
+from robomimic.algo.algo import PolicyAlgo
+import robomimic.utils.obs_utils as ObsUtils
+import robomimic.models.base_nets as rmbn
+import diffusion_policy.model.vision.crop_randomizer as dmvc
+from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
+from einops import rearrange 
+from huggingface_hub import PyTorchModelHubMixin
+
+def underscore_to_dot_keys(d: dict) -> dict:
+    """
+    Recursively convert all top-level keys in a dictionary from underscore format
+    (e.g. 'observation_images_main') to dot format ('observation.images.main').
+    Does not modify nested keys — assumes flat config keys.
+    """
+    converted = {}
+    for k, v in d.items():
+        new_key = k.replace("_", ".")
+        if isinstance(v, dict):
+            converted[new_key] = underscore_to_dot_keys(v)
+        else:
+            converted[new_key] = v
+    return converted
 
 
-class DiffusionUnetImagePolicy(BaseImagePolicy):
+class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
+                                          PyTorchModelHubMixin):
     def __init__(
         self,
         shape_meta: dict,
         noise_scheduler: DDPMScheduler,
-        obs_encoder: MultiImageObsEncoder,
         horizon,
         n_action_steps,
         n_obs_steps,
         num_inference_steps=None,
         obs_as_global_cond=True,
+        crop_shape=(480, 640),
         diffusion_step_embed_dim=256,
         down_dims=(256, 512, 1024),
         kernel_size=5,
         n_groups=8,
         cond_predict_scale=True,
+        obs_encoder_group_norm=False,
+        eval_fixed_crop=False,
         # parameters passed to step
         **kwargs,
     ):
         super().__init__()
-
-        # parse shapes
+        print("Initializing DiffusionUnetHybridImagePolicyDroid...")
         action_shape = shape_meta["action"]["shape"]
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        # get feature dim
-        obs_feature_dim = obs_encoder.output_shape()[0]
+        obs_shape_meta = shape_meta["obs"]
+        obs_config = {"low_dim": [], "rgb": [], "depth": [], "scan": []}
+        obs_key_shapes = dict()
+        for key, attr in obs_shape_meta.items():
+            shape = attr["shape"]
+            obs_key_shapes[key] = list(shape)
+
+            type = attr.get("type", "low_dim")
+            if type == "rgb":
+                obs_config["rgb"].append(key)
+            elif type == "low_dim":
+                obs_config["low_dim"].append(key)
+            else:
+                raise RuntimeError(f"Unsupported obs type: {type}")
+
+        # get raw robomimic config
+        config = get_robomimic_config(
+            algo_name="bc_rnn", hdf5_type="image", task_name="square", dataset_type="ph"
+        )
+
+        with config.unlocked():
+            # set config with shape_meta
+            config.observation.modalities.obs = obs_config
+
+            if crop_shape is None:
+                for key, modality in config.observation.encoder.items():
+                    if modality.obs_randomizer_class == "CropRandomizer":
+                        modality["obs_randomizer_class"] = None
+            else:
+                # set random crop parameter
+                ch, cw = crop_shape
+                for key, modality in config.observation.encoder.items():
+                    if modality.obs_randomizer_class == "CropRandomizer":
+                        modality.obs_randomizer_kwargs.crop_height = ch
+                        modality.obs_randomizer_kwargs.crop_width = cw
+
+        # init global state
+        ObsUtils.initialize_obs_utils_with_config(config)
+
+        # load model
+        policy: PolicyAlgo = algo_factory(
+            algo_name=config.algo_name,
+            config=config,
+            obs_key_shapes=obs_key_shapes,
+            ac_dim=action_dim,
+            device="cpu",
+        )
+
+        obs_encoder = policy.nets["policy"].nets["encoder"].nets["obs"]
+
+        if obs_encoder_group_norm:
+            # replace batch norm with group norm
+            replace_submodules(
+                root_module=obs_encoder,
+                predicate=lambda x: isinstance(x, nn.BatchNorm2d),
+                func=lambda x: nn.GroupNorm(
+                    num_groups=x.num_features // 16, num_channels=x.num_features
+                ),
+            )
+            # obs_encoder.obs_nets['agentview_image'].nets[0].nets
+
+        # obs_encoder.obs_randomizers['agentview_image']
+        if eval_fixed_crop:
+            replace_submodules(
+                root_module=obs_encoder,
+                predicate=lambda x: isinstance(x, rmbn.CropRandomizer),
+                func=lambda x: dmvc.CropRandomizer(
+                    input_shape=x.input_shape,
+                    crop_height=x.crop_height,
+                    crop_width=x.crop_width,
+                    num_crops=x.num_crops,
+                    pos_enc=x.pos_enc,
+                ),
+            )
 
         # create diffusion model
+        obs_feature_dim = obs_encoder.output_shape()[0]
         input_dim = action_dim + obs_feature_dim
         global_cond_dim = None
         if obs_as_global_cond:
@@ -81,6 +179,11 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
+
+        print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
+        print(
+            "Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters())
+        )
 
     # ========= inference  ============
     def conditional_sample(
@@ -132,11 +235,19 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        assert "past_action" not in obs_dict  # not implemented yet        
+
+        assert "past_action" not in obs_dict  # not implemented yet
         # normalize input
-        nobs = self.normalizer.normalize(obs_dict)
-        # nobs = obs_dict
-        
+        # obs_img_main = obs_dict["observation.images.main"]
+        # agent_pos = torch.cat((obs_dict['observation.robot_state.joint_positions'],obs_dict['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
+        # obs_img_secondary = obs_dict["observation.images.secondary"]
+        # nobs = {
+        #     "image_main": obs_img_main.unsqueeze(1),  # [B, Ta, C, H, W]
+        #     "image_secondary": obs_img_secondary.unsqueeze(1),
+        #     "agent_pos": agent_pos.unsqueeze(1),
+        # }
+        nobs = obs_dict
+        # nobs = self.normalizer.normalize(obs_dict)
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
@@ -154,7 +265,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:])
+                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
@@ -165,10 +276,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         else:
             # condition through impainting
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:])
+                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
             )
             nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, T, Do
+            # reshape back to B, To, Do
             nobs_features = nobs_features.reshape(B, To, -1)
             cond_data = torch.zeros(size=(B, T, Da + Do), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
@@ -186,7 +297,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         # unnormalize prediction
         naction_pred = nsample[..., :Da]
-        action_pred = self.normalizer["action"].unnormalize(naction_pred)
+        # action_pred = self.normalizer["action"].unnormalize(naction_pred)
+        action_pred = naction_pred
 
         # get action
         start = To - 1
@@ -203,8 +315,24 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         # normalize input
         assert "valid_mask" not in batch
-        nobs = self.normalizer.normalize(batch["obs"])
-        nactions = self.normalizer["action"].normalize(batch["action"])
+        # nobs = self.normalizer.normalize(batch["obs"])
+        obs_img_main = batch["observation.images.main"] # B, H W C , need to transpose to C H W
+        agent_pos = torch.cat((batch['observation.robot_state.joint_positions'],batch['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
+        obs_img_secondary = batch["observation.images.secondary"]
+        obs_img_main = rearrange(obs_img_main, 'b h w c -> b c h w')
+        obs_img_secondary = rearrange(obs_img_secondary, 'b h w c -> b c h w')
+        obs_img_main = obs_img_main[:, [2, 1, 0], :, :]  # Swap channels
+        obs_img_secondary = obs_img_secondary[:, [2, 1, 0], :, :]  # Swap channels
+        nobs = {
+            "image_main": obs_img_main.unsqueeze(1),  # [B, Ta, C, H, W]
+            "image_secondary": obs_img_secondary.unsqueeze(1),
+            "agent_pos": agent_pos.unsqueeze(1),
+        }
+
+        nactions = batch["action.target.joint_position_delta"]  # [B,Ta,Da]
+        # TODO: Handle Obs and Action normalization properly 
+        # nactions = self.normalizer["action"].normalize(batch["action"])
+        
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
 
@@ -216,20 +344,19 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:])
+                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
         else:
             # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
+            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]).float())
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, T, Do
             nobs_features = nobs_features.reshape(batch_size, horizon, -1)
             cond_data = torch.cat([nactions, nobs_features], dim=-1)
             trajectory = cond_data.detach()
-
         # generate impainting mask
         condition_mask = self.mask_generator(trajectory.shape)
 
@@ -255,7 +382,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
         # Predict the noise residual
         pred = self.model(
-            noisy_trajectory, timesteps, local_cond=local_cond, global_cond=global_cond
+            noisy_trajectory.float(), timesteps, local_cond=local_cond, global_cond=global_cond
         )
 
         pred_type = self.noise_scheduler.config.prediction_type
