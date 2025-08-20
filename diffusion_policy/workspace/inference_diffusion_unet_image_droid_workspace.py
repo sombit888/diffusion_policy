@@ -6,8 +6,6 @@ if __name__ == "__main__":
     ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
-    
-# current restriction with hala processes, cannot check
 
 import os
 import hydra
@@ -33,12 +31,10 @@ from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from einops import rearrange, reduce
 
-os.environ["WANDB_DISABLE_SYSTEM_STATS"] = "true"
-os.environ["WANDB_DISABLE_GPU_STATS"] = "true"
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
-class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
+class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
     include_keys = ["global_step", "epoch"]
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -69,9 +65,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
             "observation.robot_state.joint_positions",
             "observation.robot_state.gripper_position",
             "action.target.joint_position_delta",
-            'action.target.joint_position_delta_mask',
             "action.target.joint_position",
-            
             ]
 
 
@@ -85,50 +79,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-        # configure dataset
-
-        dataset: BaseImageDataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        dataset.filter_episodes(
-            drop_columns=['observation.images.wrist_camera'],
-            task_str = 'open',
-            horizon=cfg.horizon
-        )
-        assert isinstance(dataset, BaseImageDataset)
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        # normalizer = dataset.get_normalizer()
-        normalizer = None
-        # configure validation dataset
-        # val_dataset = dataset.get_validation_dataset()
-        # val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-        # self.model.set_normalizer(normalizer)
-        # if cfg.training.use_ema:
-        #     self.ema_model.set_normalizer(normalizer)
-
-        # configure lr scheduler
-        lr_scheduler = get_scheduler(
-            cfg.training.lr_scheduler,
-            optimizer=self.optimizer,
-            num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(len(train_dataloader) * cfg.training.num_epochs)
-            // cfg.training.gradient_accumulate_every,
-            # pytorch assumes stepping LRScheduler every epoch
-            # however huggingface diffusers steps it every batch
-            last_epoch=self.global_step - 1,
-        )
-
-        # configure ema
-        ema: EMAModel = None
-        if cfg.training.use_ema:
-            ema = hydra.utils.instantiate(cfg.ema, model=self.ema_model)
-
-        # configure env
-        # env_runner: BaseImageRunner
-        # env_runner = hydra.utils.instantiate(
-        #     cfg.task.env_runner, output_dir=self.output_dir
-        # )
-        # assert isinstance(env_runner, BaseImageRunner)
-
+    
         # configure logging
         if cfg.wandb:
         
@@ -154,7 +105,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
-
+        import ipdb; ipdb.set_trace()
         # save batch for sampling
         train_sampling_batch = None
 
@@ -186,74 +137,74 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 #         record_shapes=False,
                 #         with_stack= False,
                 #     ) as prof:
-                with tqdm.tqdm(
-                    train_dataloader,
-                    desc=f"Training epoch {self.epoch}",
-                    leave=False,
-                    mininterval=cfg.training.tqdm_interval_sec,
-                ) as tepoch:
-                        for batch_idx, batch in enumerate(tepoch):
-                            # device transfer
-                            batch = dict_apply_with_keys(
-                                batch, lambda k, x: x.to(device, non_blocking=True),keys=self.keys_to_keep   
-                            )
-                            if train_sampling_batch is None:
-                                train_sampling_batch = batch
+                # with tqdm.tqdm(
+                #     train_dataloader,
+                #     desc=f"Training epoch {self.epoch}",
+                #     leave=False,
+                #     mininterval=cfg.training.tqdm_interval_sec,
+                # ) as tepoch:
+                #         for batch_idx, batch in enumerate(tepoch):
+                #             # device transfer
+                #             batch = dict_apply_with_keys(
+                #                 batch, lambda k, x: x.to(device, non_blocking=True),keys=self.keys_to_keep   
+                #             )
+                #             if train_sampling_batch is None:
+                #                 train_sampling_batch = batch
 
-                            # compute loss
-                            raw_loss = self.model.compute_loss(batch)
-                            # prof.step()  # flush profiler buffer after each iteration
-                            # if batch_idx > 10:  # Profile only first 10 steps
-                            #     break
-                            loss = raw_loss / cfg.training.gradient_accumulate_every
-                            loss.backward()
+                #             # compute loss
+                #             raw_loss = self.model.compute_loss(batch)
+                #             # prof.step()  # flush profiler buffer after each iteration
+                #             # if batch_idx > 10:  # Profile only first 10 steps
+                #             #     break
+                #             loss = raw_loss / cfg.training.gradient_accumulate_every
+                #             loss.backward()
 
-                            # step optimizer
-                            if (
-                                self.global_step % cfg.training.gradient_accumulate_every
-                                == 0
-                            ):
-                                self.optimizer.step()
-                                self.optimizer.zero_grad()
-                                lr_scheduler.step()
+                #             # step optimizer
+                #             if (
+                #                 self.global_step % cfg.training.gradient_accumulate_every
+                #                 == 0
+                #             ):
+                #                 self.optimizer.step()
+                #                 self.optimizer.zero_grad()
+                #                 lr_scheduler.step()
 
-                            # update ema
-                            if cfg.training.use_ema:
-                                ema.step(self.model)
+                #             # update ema
+                #             if cfg.training.use_ema:
+                #                 ema.step(self.model)
 
-                            # logging
-                            raw_loss_cpu = raw_loss.item()
-                            tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
-                            train_losses.append(raw_loss_cpu)
-                            step_log = {
-                                "train_loss": raw_loss_cpu,
-                                "global_step": self.global_step,
-                                "epoch": self.epoch,
-                                "lr": lr_scheduler.get_last_lr()[0],
-                            }
+                #             # logging
+                #             raw_loss_cpu = raw_loss.item()
+                #             tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
+                #             train_losses.append(raw_loss_cpu)
+                #             step_log = {
+                #                 "train_loss": raw_loss_cpu,
+                #                 "global_step": self.global_step,
+                #                 "epoch": self.epoch,
+                #                 "lr": lr_scheduler.get_last_lr()[0],
+                #             }
 
-                            is_last_batch = batch_idx == (len(train_dataloader) - 1)
-                            if not is_last_batch:
-                                # log of last step is combined with validation and rollout
-                                if cfg.wandb:
-                                    wandb_run.log(step_log, step=self.global_step)
-                                json_logger.log(step_log)
-                                self.global_step += 1
+                #             is_last_batch = batch_idx == (len(train_dataloader) - 1)
+                #             if not is_last_batch:
+                #                 # log of last step is combined with validation and rollout
+                #                 if cfg.wandb:
+                #                     wandb_run.log(step_log, step=self.global_step)
+                #                 json_logger.log(step_log)
+                #                 self.global_step += 1
 
-                            if (cfg.training.max_train_steps is not None) and batch_idx >= (
-                                cfg.training.max_train_steps - 1
-                            ):
-                                break
+                #             if (cfg.training.max_train_steps is not None) and batch_idx >= (
+                #                 cfg.training.max_train_steps - 1
+                #             ):
+                #                 break
 
-                # at the end of each epoch
-                # replace train_loss with epoch average
-                train_loss = np.mean(train_losses)
-                step_log["train_loss"] = train_loss
+                # # at the end of each epoch
+                # # replace train_loss with epoch average
+                # train_loss = np.mean(train_losses)
+                # step_log["train_loss"] = train_loss
 
-                # ========= eval for this epoch ==========
-                policy = self.model
-                if cfg.training.use_ema:
-                    policy = self.ema_model
+                # # ========= eval for this epoch ==========
+                # policy = self.model
+                # if cfg.training.use_ema:
+                #     policy = self.ema_model
                 policy.eval()
 
                 # run rollout
@@ -290,8 +241,8 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 # run diffusion sampling on a training batch
                 # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
-                if (self.epoch % cfg.training.sample_every) == 0:
-                # if False:
+                # if (self.epoch % cfg.training.sample_every) == 0:
+                if False:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         # import ipdb; ipdb.set_trace()
@@ -303,39 +254,19 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                         obs_img_main = batch["observation.images.main"]
                         obs_img_secondary = batch["observation.images.secondary"]
                         obs_img_main = rearrange(obs_img_main, "B H W C -> B C H W")
-                        obs_img_secondary = rearrange(obs_img_secondary, "B H W C -> B C H W")
-                        obs_img_main = obs_img_main[:, [2, 1, 0], :, :]  # Swap channels
-                        obs_img_secondary = obs_img_secondary[:, [2, 1, 0], :, :]  # Swap channels
-                        
-                        # import ipdb; ipdb.set_trace() 
-                        # from PIL import Image
-                        # ## save images 
-                        # obs_img_main_dummy = obs_img_main.cpu().numpy()
-                        # obs_img_secondary_dummy = obs_img_secondary.cpu().numpy()
-                        # for i in range(obs_img_main_dummy.shape[0]):
-                        #     main_img = obs_img_main_dummy[i].transpose(1, 2, 0)  # [C, H, W] -> [H, W, C]
-                        #     secondary_img = obs_img_secondary_dummy[i].transpose(1, 2, 0)
-                        #     Image.fromarray(main_img).save(f"main_image_{i}.png")
-                        #     Image.fromarray(secondary_img).save(f"secondary_image_{i}.png")
-                        
                         nobs = {
                             "image_main": obs_img_main.unsqueeze(1),  # [B, Ta, C, H, W]
                             "image_secondary": obs_img_secondary.unsqueeze(1),
-                            "agent_pos": agent_pos.unsqueeze(1)/(torch.pi),  # normalize to [0, 1]
+                            "agent_pos": agent_pos.unsqueeze(1),
                         }
                         gt_action = batch["action.target.joint_position"]
-                        gt_delta_action = batch['action.target.joint_position_delta']
-                        result = policy.predict_action(nobs) # [B,Ta,Da] , in joint_delta  
-
-                        pred_action = result["action_pred"][...,:7] + agent_pos[:,:7].unsqueeze(1)  # [B, Ta, Da] # only the arm joint angles
-                        action_mse = torch.nn.functional.mse_loss(pred_action, gt_action[..., :7]
-                                                                  )
-                        gripper_mse = torch.nn.functional.mse_loss(result["action_pred"][..., -1:], gt_action[..., -1:])
-                        step_log["train_action_mse"] = action_mse.item()
-                        step_log["train_gripper_mse"] = gripper_mse.item()
-                        # mse = torch.nn.functional.mse_loss(pred_action[...,:-1], gt_action[...,0,:-1])
-                        # mse_delta = torch.nn.functional.mse_loss(result['action_pred'][..., -1:], delta_action[..., -1:])
-                        # step_log["train_action_mse_error"] = mse.item()
+                        delta_action = batch['action.target.joint_position_delta']
+                        result = policy.predict_action(nobs)  
+                        
+                        pred_action = result["action_pred"][:,0] + agent_pos
+                        mse = torch.nn.functional.mse_loss(pred_action[...,:-1], gt_action[...,0,:-1])
+                        mse_delta = torch.nn.functional.mse_loss(result['action_pred'][..., -1:], delta_action[..., -1:])
+                        step_log["train_action_mse_error"] = mse.item()
                         del batch
                         del obs_img_main
                         del obs_img_secondary
@@ -344,7 +275,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                         del gt_action
                         del result
                         del pred_action
-                        # del mse
+                        del mse
 
                 # checkpoint
                 if (self.epoch % cfg.training.checkpoint_every) == 0:
@@ -385,7 +316,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem,
 )
 def main(cfg):
-    workspace = TrainDiffusionUnetImageWorkspaceDroid(cfg)
+    workspace = InferenceDiffusionUnetImageWorkspaceDroid(cfg)
     workspace.run()
 
 

@@ -38,7 +38,7 @@ os.environ["WANDB_DISABLE_GPU_STATS"] = "true"
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
-class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
+class TrainDiffusionUnetImageWorkspaceDroidCartesian(BaseWorkspace):
     include_keys = ["global_step", "epoch"]
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -66,14 +66,15 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
         self.epoch = 0
         self.keys_to_keep = ["observation.images.main",
             "observation.images.secondary",
+            "observation.images.wrist_camera",
             "observation.robot_state.joint_positions",
+            "observation.robot_state.cartesian_position",
             "observation.robot_state.gripper_position",
-            "action.target.joint_position_delta",
-            'action.target.joint_position_delta_mask',
-            "action.target.joint_position",
-            
+            "action.target.cartesian_position_delta",
+            'action.target.cartesian_position_delta_mask',
+            # "action.target.cartesian_position",
             ]
-
+        print(f"Keys to keep: {self.keys_to_keep}")
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -90,8 +91,8 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
         dataset: BaseImageDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         dataset.filter_episodes(
-            drop_columns=['observation.images.wrist_camera'],
-            task_str = 'open',
+            # drop_columns=['observation.images.wrist_camera'],
+            # task_str = 'open',
             horizon=cfg.horizon
         )
         assert isinstance(dataset, BaseImageDataset)
@@ -290,8 +291,8 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 # run diffusion sampling on a training batch
                 # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 
-                if (self.epoch % cfg.training.sample_every) == 0:
-                # if False:
+                # if (self.epoch % cfg.training.sample_every) == 0:
+                if False:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         # import ipdb; ipdb.set_trace()
@@ -385,7 +386,7 @@ class TrainDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem,
 )
 def main(cfg):
-    workspace = TrainDiffusionUnetImageWorkspaceDroid(cfg)
+    workspace = TrainDiffusionUnetImageWorkspaceDroidCartesian(cfg)
     workspace.run()
 
 

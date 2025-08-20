@@ -316,20 +316,30 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
         # normalize input
         assert "valid_mask" not in batch
         # nobs = self.normalizer.normalize(batch["obs"])
+        agent_pos = torch.cat((batch['observation.robot_state.cartesian_position'][:,:3],batch['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
         obs_img_main = batch["observation.images.main"] # B, H W C , need to transpose to C H W
-        agent_pos = torch.cat((batch['observation.robot_state.joint_positions'],batch['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
         obs_img_secondary = batch["observation.images.secondary"]
+        obs_img_wrist = batch["observation.images.wrist_camera"]
         obs_img_main = rearrange(obs_img_main, 'b h w c -> b c h w')
         obs_img_secondary = rearrange(obs_img_secondary, 'b h w c -> b c h w')
+        obs_img_wrist = rearrange(obs_img_wrist, 'b h w c -> b c h w')
         obs_img_main = obs_img_main[:, [2, 1, 0], :, :]  # Swap channels
         obs_img_secondary = obs_img_secondary[:, [2, 1, 0], :, :]  # Swap channels
+        obs_img_wrist = obs_img_wrist[:, [2, 1, 0], :, :]  # Swap channels
         nobs = {
             "image_main": obs_img_main.unsqueeze(1),  # [B, Ta, C, H, W]
             "image_secondary": obs_img_secondary.unsqueeze(1),
-            "agent_pos": agent_pos.unsqueeze(1),
+            "image_wrist": obs_img_wrist.unsqueeze(1),
+            "agent_pos": agent_pos.unsqueeze(1),  # normalize to [0, 1]
         }
-
-        nactions = batch["action.target.joint_position_delta"]  # [B,Ta,Da]
+        # nactions = batch["action.target.cartesian_position_delta"]  # [B,Ta,Da]
+        nactions = torch.cat(
+            [
+                batch["action.target.cartesian_position_delta"][..., :3],   # first 3
+                batch["action.target.cartesian_position_delta"][..., -1:],  # last one (keep dims)
+            ],
+            dim=-1
+)
         # TODO: Handle Obs and Action normalization properly 
         # nactions = self.normalizer["action"].normalize(batch["action"])
         
@@ -393,8 +403,11 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
+        mask = batch["action.target.cartesian_position_delta_mask"].unsqueeze(-1)
         loss = F.mse_loss(pred, target, reduction="none")
-        loss = loss * loss_mask.type(loss.dtype)
-        loss = reduce(loss, "b ... -> b (...)", "mean")
-        loss = loss.mean()
-        return loss
+        # loss = loss * loss_mask.type(loss.dtype)
+
+        loss = loss * mask
+        # loss = reduce(loss, "b ... -> b (...)", "mean")
+        mean_loss = loss.sum() / mask.sum()
+        return mean_loss

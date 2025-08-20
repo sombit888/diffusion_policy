@@ -43,7 +43,8 @@ from diffusion_policy.dataset.lerobot_utils import (
     load_info,
     np_column,
 )
-from diffusion_policy.dataset.filter import add_target_joint_position, filter_episodes , add_target_joint_delta, select_hf_dataset_episodes
+from diffusion_policy.dataset.filter import add_target_joint_position, filter_episodes , add_target_joint_delta_gripper_abs,add_target_joint_delta_gripper_abs,add_target_joint_delta_gripper_abs_mask, select_hf_dataset_episodes
+from diffusion_policy.dataset.filter import add_target_cartesian_delta_gripper_abs_mask
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
@@ -442,13 +443,16 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
             "action.robot_state.joint_velocities",
             "action.target_cartesian_position",
             "action.target_gripper_position",
-            "action.target.joint_position",
-            "action.target.joint_position_delta",
+            "action.target.cartesian_position_delta",
+            'action.target.cartesian_position_delta_mask',
+            # "action.target.joint_position",
+            # "action.target.joint_position_delta",
+            # "action.target.joint_position_delta_mask" ,
             # "task",
             # "episode_id",
             "observation.images.main",
             "observation.images.secondary",
-            # 'observation.images.wrist_camera',
+            'observation.images.wrist_camera',
             # 'observation.timestamp.cameras.main',
             # 'observation.timestamp.cameras.secondary',
             # 'observation.timestamp.cameras.wrist_camera',
@@ -461,14 +465,14 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
         self.img_keys = [
             "observation.images.main",
             "observation.images.secondary",
-            # 'observation.images.wrist_camera',
+            'observation.images.wrist_camera',
         ]
         self.to_tensor = transforms.ToTensor()
         # breakpoint()
         # self._add_target_keys(horizon=5)  # Add target keys with horizon of 5
         # breakpoint()
 
-    def filter_episodes(self, drop_columns: list, horizon: int = 5,task_str: str = ""):
+    def filter_episodes(self, drop_columns: list = [], horizon: int = 5,task_str: str = ""):
         """
         Filter dataset to only include 'open' tasks, drop unused columns, and add future action targets.
         Modifies the dataset in-place.
@@ -487,11 +491,12 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
             self.hf_dataset = self.hf_dataset.remove_columns(drop_columns)
 
         # Step 4: Add future targets
-        add_target_joint_position(self, horizon=horizon)
-
-        add_target_joint_delta(self, horizon=horizon)
+        # add_target_joint_position(self, horizon=horizon)
+        # add_target_joint_delta_gripper_abs(self, horizon=horizon)
+        # add_target_joint_delta_gripper_abs_mask(self, horizon=horizon)
+        add_target_cartesian_delta_gripper_abs_mask(self, horizon=horizon)
         self.hf_dataset.set_format(type="torch", columns=self.keys_to_add)
-        
+
         # custom_transform = partial(transform_fnc, keys_to_add=self.keys_to_add, img_keys=self.img_keys, to_tensor=self.to_tensor)
         # self.hf_dataset = self.hf_dataset.with_transform(
         #     custom_transform
@@ -514,48 +519,6 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
 
         return item
         
-# def transform_fnc(example,keys_to_add,img_keys, to_tensor):
-#     item = {}
-#     for key in list(example.keys()):
-#         if key in keys_to_add:
-#             if key in img_keys:
-#                 item[key] = to_tensor(np.array(example[key]))
-#             elif key not in item:
-#                 # If the key is not present, we can add a default value
-#                 # Here we assume the default value is None, but it can be changed based on requirements
-#                 item[key] = None
-#             else:
-#                 # If the key is present, we can convert it to a tensor if it's not already
-#                 if isinstance(item[key], np.ndarray):
-#                     item[key] = torch.tensor(item[key])
-#                 elif isinstance(item[key], list):
-#                     item[key] = torch.tensor(np.array(item[key]))
-#     return item
-# def transform_fnc(example, keys_to_add, img_keys, to_tensor):
-#     item = {}
-#     for key in keys_to_add:
-#         if key in example:
-#             val = example[key]
-#             if key in img_keys:
-#                 # Pass PIL image directly to to_tensor
-#                 if isinstance(val, Image.Image):
-#                     item[key] = to_tensor(val)
-#                 elif isinstance(val, np.ndarray):
-#                     item[key] = to_tensor(val)
-#                 else:
-#                     raise TypeError(f"Expected PIL.Image or np.ndarray for {key}, got {type(val)}")
-#             else:
-#                 # Convert other data types to tensor
-#                 if isinstance(val, np.ndarray):
-#                     item[key] = torch.tensor(val)
-#                 elif isinstance(val, list):
-#                     item[key] = torch.tensor(val)
-#                 else:
-#                     item[key] = torch.tensor([val]) if isinstance(val, (int, float)) else val
-#         else:
-#             # Default if key not in example
-#             item[key] = None
-#     return item
 def eager_transform(example, keys_to_add, img_keys, to_tensor):
     item = {}
     for key in keys_to_add:
@@ -759,10 +722,32 @@ if __name__ == "__main__":
     # filter columns , remove wrist camera
     # add_target_joint_position(dataset_open, horizon=5)
     
-    dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
-    dataset.filter_episodes(
-            drop_columns=['observation.images.wrist_camera'],
-            task_str = 'close',
-            horizon=5
-        )
+    # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
+    dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/data_insait_carrot_lerobot/")
+    # dataset.filter_episodes(
+    #         drop_columns=['observation.images.wrist_camera'],
+    #         task_str = 'close',
+    #         horizon=5
+    #     )
+    cartesian_positions = dataset['observation.robot_state.cartesian_position']
+    positions_array = np.array(cartesian_positions)
+    mean_pos = np.mean(positions_array, axis=0)
+    std_pos = np.std(positions_array, axis=0)
+    starting_pos = positions_array[0]
+    print(f"Starting position: {starting_pos}")
+    print(f"Standard deviation of positions: {std_pos}")
+    print(f"Mean position: {mean_pos}")
+
+    # print(dataset.hf_dataset.column_names)
+    import ipdb; ipdb.set_trace()
+    
     save_rerun_viz_id(dataset, episode_index=0, output_dir='/scratch/sombit_dey/output_rerun/', output_filename='rerun_viz.rrd')
+    
+    
+    '''
+    Things to do ; 
+    1. Check the original image -> verify its rgb values, the dataset is in bgr format, need to 
+    2. Check the gripper values -> 0 is for open , 1 is for close , need to be ensured during inference :tick:
+    3. Check the cartesian position translation values ->
+    4. Check the rotation values -> 
+    ''' 

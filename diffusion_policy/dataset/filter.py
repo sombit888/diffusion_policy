@@ -328,7 +328,7 @@ def add_target_joint_position(dataset, horizon=5,from_observation=True):
         "action.target.joint_position", targets.tolist()
     )
 
-def add_target_joint_delta(dataset, horizon=5, from_observation=True):
+def add_target_joint_delta_gripper_delta(dataset, horizon=5, from_observation=True):
     # Load necessary arrays once
     episode_indices = np.array(dataset.np_column("episode_index"))
     if not from_observation:
@@ -379,10 +379,207 @@ def add_target_joint_delta(dataset, horizon=5, from_observation=True):
             targets[idxs[i]] = deltas
 
     # Add to dataset
-    dataset.hf_dataset = dataset.hf_dataset.add_column(
+    dataset.hf_dataset.add_column(
         "action.target.joint_position_delta", targets.tolist()
     )
 
+def add_target_joint_delta_gripper_abs(dataset, horizon=5, from_observation=True):
+    import numpy as np
+    from tqdm import tqdm
+
+    # Load necessary arrays once
+    episode_indices = np.array(dataset.np_column("episode_index"))
+    if not from_observation:
+        joint_pos = np.array(dataset.np_column("action.joint_position"))
+        gripper_pos = np.array(dataset.np_column("action.gripper_position"))
+    else:
+        joint_pos = np.array(dataset.np_column("observation.robot_state.joint_positions"))
+        gripper_pos = np.array(dataset.np_column("observation.robot_state.gripper_position"))
+
+    num_samples = joint_pos.shape[0]
+    joint_dim = joint_pos.shape[1]
+    gripper_pos = gripper_pos.reshape(num_samples, -1)  # Ensure 2D
+    gripper_dim = gripper_pos.shape[1]
+
+    # Prepare output
+    targets = np.zeros(
+        (num_samples, horizon, joint_dim + gripper_dim), dtype=joint_pos.dtype
+    )
+
+    # Process episode by episode for clean slicing
+    unique_episodes = np.unique(episode_indices)
+    for ep in tqdm(unique_episodes, desc="Computing target joint deltas + absolute gripper"):
+        idxs = np.where(episode_indices == ep)[0]
+        ep_joint_pos = joint_pos[idxs]
+        ep_gripper_pos = gripper_pos[idxs]
+        ep_len = len(idxs)
+
+        for i in range(ep_len):
+            current_joint = ep_joint_pos[i]
+            # Grab future joint positions and gripper positions
+            end = min(i + horizon + 1, ep_len)
+            future_joints = ep_joint_pos[i + 1 : end]
+            future_grippers = ep_gripper_pos[i + 1 : end]
+
+            # Padding if needed
+            if len(future_joints) < horizon:
+                if len(future_joints) > 0:
+                    joint_pad = np.repeat(future_joints[-1][np.newaxis, :], horizon - len(future_joints), axis=0)
+                    gripper_pad = np.repeat(future_grippers[-1][np.newaxis, :], horizon - len(future_grippers), axis=0)
+                else:
+                    joint_pad = np.repeat(current_joint[np.newaxis, :], horizon, axis=0)
+                    gripper_pad = np.repeat(ep_gripper_pos[i][np.newaxis, :], horizon, axis=0)
+
+                future_joints = np.concatenate([future_joints, joint_pad], axis=0)
+                future_grippers = np.concatenate([future_grippers, gripper_pad], axis=0)
+
+            # Compute joint deltas and use absolute gripper
+            # joint_deltas = future_joints[:horizon] - current_joint
+            joints_sequence = np.vstack([current_joint, future_joints[:horizon]])
+            joint_deltas = np.diff(joints_sequence, axis=0)
+            gripper_absolutes = future_grippers[:horizon]
+
+            # Combine and assign
+            targets[idxs[i]] = np.concatenate([joint_deltas, gripper_absolutes], axis=1)
+
+    # Add to dataset
+    dataset.hf_dataset.add_column(
+        "action.target.joint_position_delta", targets.tolist()
+    )
+    
+def add_target_joint_delta_gripper_abs_mask(dataset, horizon=5, from_observation=True):
+    
+    # Load necessary arrays once
+    episode_indices = np.array(dataset.np_column("episode_index"))
+    if not from_observation:
+        joint_pos = np.array(dataset.np_column("action.joint_position"))
+        gripper_pos = np.array(dataset.np_column("action.gripper_position"))
+    else:
+        joint_pos = np.array(dataset.np_column("observation.robot_state.joint_positions"))
+        gripper_pos = np.array(dataset.np_column("observation.robot_state.gripper_position"))
+
+    num_samples = joint_pos.shape[0]
+    joint_dim = joint_pos.shape[1]
+    gripper_pos = gripper_pos.reshape(num_samples, -1)  # Ensure 2D
+    gripper_dim = gripper_pos.shape[1]
+
+    # Prepare output
+    targets = np.zeros(
+        (num_samples, horizon, joint_dim + gripper_dim), dtype=joint_pos.dtype
+    )
+    target_mask = np.zeros((num_samples, horizon), dtype=np.int8)
+
+    # Process episode by episode for clean slicing
+    unique_episodes = np.unique(episode_indices)
+    for ep in tqdm(unique_episodes, desc="Computing target joint deltas + absolute gripper"):
+        idxs = np.where(episode_indices == ep)[0]
+        ep_joint_pos = joint_pos[idxs]
+        ep_gripper_pos = gripper_pos[idxs]
+        ep_len = len(idxs)
+
+        for i in range(ep_len):
+            current_joint = ep_joint_pos[i]
+            end = min(i + horizon + 1, ep_len)
+            future_joints = ep_joint_pos[i + 1 : end]
+            future_grippers = ep_gripper_pos[i + 1 : end]
+            valid_len = len(future_joints)
+
+            # Padding if needed
+            if valid_len < horizon:
+                if valid_len > 0:
+                    joint_pad = np.repeat(future_joints[-1][np.newaxis, :], horizon - valid_len, axis=0)
+                    gripper_pad = np.repeat(future_grippers[-1][np.newaxis, :], horizon - valid_len, axis=0)
+                else:
+                    joint_pad = np.repeat(current_joint[np.newaxis, :], horizon, axis=0)
+                    gripper_pad = np.repeat(ep_gripper_pos[i][np.newaxis, :], horizon, axis=0)
+
+                future_joints = np.concatenate([future_joints, joint_pad], axis=0)
+                future_grippers = np.concatenate([future_grippers, gripper_pad], axis=0)
+
+            # Compute joint deltas and use absolute gripper
+            # joint_deltas = future_joints[:horizon] - current_joint
+            joints_sequence = np.vstack([current_joint, future_joints[:horizon]])
+            joint_deltas = np.diff(joints_sequence, axis=0)
+            gripper_absolutes = future_grippers[:horizon]
+
+            # Combine and assign
+            targets[idxs[i]] = np.concatenate([joint_deltas, gripper_absolutes], axis=1)
+            target_mask[idxs[i], :valid_len] = 1  # mark valid steps
+
+    # Add to dataset
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.joint_position_delta", targets.tolist()
+    )
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.joint_position_delta_mask", target_mask.tolist()
+    )
+    
+def add_target_cartesian_delta_gripper_abs_mask(dataset, horizon=5, from_observation=True):
+    # Load necessary arrays once
+    episode_indices = np.array(dataset.np_column("episode_index"))
+    if not from_observation:
+        cartesian_pose = np.array(dataset.np_column("action.cartesian_position"))
+        gripper_pos = np.array(dataset.np_column("action.gripper_position"))
+    else:
+        cartesian_pose  = np.array(dataset.np_column("observation.robot_state.cartesian_position"))
+        gripper_pos = np.array(dataset.np_column("observation.robot_state.gripper_position"))
+
+    num_samples = cartesian_pose.shape[0]
+    state_dim = cartesian_pose.shape[1]
+    gripper_pos = gripper_pos.reshape(num_samples, -1)  # Ensure 2D
+    gripper_dim = gripper_pos.shape[1]
+
+    # Prepare output
+    targets = np.zeros(
+        (num_samples, horizon, state_dim + gripper_dim), dtype=cartesian_pose.dtype
+    )
+    target_mask = np.zeros((num_samples, horizon), dtype=np.int8)
+
+    # Process episode by episode for clean slicing
+    unique_episodes = np.unique(episode_indices)
+    for ep in tqdm(unique_episodes, desc="Computing target joint deltas + absolute gripper"):
+        idxs = np.where(episode_indices == ep)[0]
+        ep_cartesian_pose = cartesian_pose[idxs]
+        ep_gripper_pos = gripper_pos[idxs]
+        ep_len = len(idxs)
+
+        for i in range(ep_len):
+            current_cartesian = ep_cartesian_pose[i]
+            end = min(i + horizon + 1, ep_len)
+            future_cartesian = ep_cartesian_pose[i + 1 : end]
+            future_grippers = ep_gripper_pos[i + 1 : end]
+            valid_len = len(future_cartesian)
+
+            # Padding if needed
+            if valid_len < horizon:
+                if valid_len > 0:
+                    cartesian_pad = np.repeat(future_cartesian[-1][np.newaxis, :], horizon - valid_len, axis=0)
+                    gripper_pad = np.repeat(future_grippers[-1][np.newaxis, :], horizon - valid_len, axis=0)
+                else:
+                    cartesian_pad = np.repeat(current_cartesian[np.newaxis, :], horizon, axis=0)
+                    gripper_pad = np.repeat(ep_gripper_pos[i][np.newaxis, :], horizon, axis=0)
+
+                future_cartesian = np.concatenate([future_cartesian, cartesian_pad], axis=0)
+                future_grippers = np.concatenate([future_grippers, gripper_pad], axis=0)
+
+            # Compute joint deltas and use absolute gripper
+            # joint_deltas = future_joints[:horizon] - current_joint
+            cartesian_sequence = np.vstack([current_cartesian, future_cartesian[:horizon]])
+            cartesian_deltas = np.diff(cartesian_sequence, axis=0)
+            gripper_absolutes = future_grippers[:horizon]
+
+            # Combine and assign
+            targets[idxs[i]] = np.concatenate([cartesian_deltas, gripper_absolutes], axis=1)
+            target_mask[idxs[i], :valid_len] = 1  # mark valid steps
+
+    # Add to dataset
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.cartesian_position_delta", targets.tolist()
+    )
+    dataset.hf_dataset = dataset.hf_dataset.add_column(
+        "action.target.cartesian_position_delta_mask", target_mask.tolist()
+    )
+    
 if __name__ == "__main__":
     # Test
     pass

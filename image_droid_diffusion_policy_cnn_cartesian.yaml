@@ -1,4 +1,4 @@
-_target_: diffusion_policy.workspace.train_diffusion_unet_image_droid_workspace.TrainDiffusionUnetImageWorkspaceDroid
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_droid_workspace_cartesian.TrainDiffusionUnetImageWorkspaceDroidCartesian
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
@@ -35,7 +35,7 @@ logging:
   - train_diffusion_unet_hybrid
   - droid
   - default
-wandb: null
+wandb: 1
 multi_run:
   run_dir: /scratch/sombit_dey/data/outputs/2023.01.16/20.20.06_train_diffusion_unet_hybrid_pusht_image
   wandb_name_base: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_pusht_image
@@ -85,11 +85,11 @@ policy:
   shape_meta:
     action:
       shape:
-      - 8
+      - 4
     obs:
       agent_pos:
         shape:
-        - 8
+        - 4
         type: low_dim
       image_main:
         shape:
@@ -98,6 +98,12 @@ policy:
         - 640
         type: rgb
       image_secondary:
+        shape:
+        - 3
+        - 480
+        - 640
+        type: rgb
+      image_wrist:
         shape:
         - 3
         - 480
@@ -127,7 +133,8 @@ shape_meta:
 task:
   dataset:
     _target_: diffusion_policy.dataset.lerobot_dataset.LeRobotDatasetDiffusion
-    dataset_path: /scratch/sombit_dey/insait_droid/insait_droid/
+    dataset_path: /scratch/sombit_dey/data_insait_carrot_lerobot/ 
+    # dataset_path: /scratch/sombit_dey/insait_droid/insait_droid/
     split: train
     # horizon: 16
     # max_train_episodes: 90

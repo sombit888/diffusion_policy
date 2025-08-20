@@ -18,6 +18,121 @@ import dill
 import wandb
 import json
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
+import requests 
+from flask import Flask, request, jsonify
+import os
+from PIL import Image
+from torchvision import transforms
+to_tensor = transforms.ToTensor() 
+policy = None
+device = None
+app = Flask(__name__)
+
+def load_model(checkpoint_path: str, output_dir: str, device_str: str):
+    global policy, device
+
+    if os.path.exists(output_dir):
+        print(f"Output path {output_dir} already exists!")
+
+    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    payload = torch.load(open(checkpoint_path, "rb"), pickle_module=dill)
+    cfg = payload["cfg"]
+    cls = hydra.utils.get_class(cfg._target_)
+    workspace = cls(cfg, output_dir=output_dir)
+    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+
+    _policy = workspace.model
+    if cfg.training.use_ema:
+        _policy = workspace.ema_model
+
+    device = torch.device(device_str)
+    _policy.to(device)
+    _policy.eval()
+
+    policy = _policy
+    print("Model loaded and ready.")
+
+# @app.route("/app/predict_action", methods=["POST"])
+# def predict_action():
+#     global policy, device
+#     if policy is None:
+#         return jsonify({"error": "Model not loaded."}), 500
+
+#     image_main_file = request.files["image_main"]  # type: FileStorage
+#     image_main = Image.open(image_main_file.stream)
+
+#     image_secondary_file = request.files["image_secondary"]
+#     image_secondary = Image.open(image_secondary_file.stream)
+
+#     joint_position = torch.tensor(json.loads(request.form['joint_position'])).to("cuda")
+#     gripper_position = torch.tensor(json.loads(request.form['gripper_position'])).to("cuda")
+#     agent_pos = torch.cat((joint_position,gripper_position)).unsqueeze(0)
+#     image_main = to_tensor(image_main).unsqueeze(0)
+#     image_secondary = to_tensor(image_secondary).unsqueeze(0)
+
+#     nobs = {
+#         "image_main": image_main.unsqueeze(1).cuda(),  # [B, Ta, C, H, W]
+#         "image_secondary": image_secondary.unsqueeze(1).cuda(),
+#         "agent_pos": agent_pos.unsqueeze(1).cuda()/2*torch.pi,  # normalize to [-0.5, 0.5]
+#     }
+
+#     with torch.no_grad():
+#         action = policy.predict_action(nobs)
+#     # You might need to post-process action, depending on model output
+#     action_first = action['action'].cpu()[0,1].tolist()
+#     arm_action = action_first[:7]  # Assuming first 7 are joint positions
+#     gripper_action = action_first[7]  # Assuming the 8th is gripper position
+#     return jsonify({
+#             "arm_action": arm_action,
+#             "gripper_action": gripper_action,
+#         })
+
+# Starting position: [ 3.67500335e-01 8.79731495e-04 4.88036543e-01 3.11467892e+00 -1.03698627e-02 -2.41391687e-02]
+@app.route("/app/predict_action", methods=["POST"])
+def predict_action():
+    global policy, device
+    if policy is None:
+        return jsonify({"error": "Model not loaded."}), 500
+
+    image_main_file = request.files["image_main"]  # type: FileStorage
+    image_main = Image.open(image_main_file.stream)
+
+    image_secondary_file = request.files["image_secondary"]
+    image_secondary = Image.open(image_secondary_file.stream)
+
+    image_wrist = request.files.get("image_wrist")
+    image_wrist = Image.open(image_wrist.stream)
+
+    cartesian_position = torch.tensor(json.loads(request.form['robot_pose'])).to("cuda")
+    gripper_position = torch.tensor(json.loads(request.form['gripper_position'])).to("cuda")
+    
+    image_main = to_tensor(image_main).unsqueeze(0)
+    image_secondary = to_tensor(image_secondary).unsqueeze(0)
+    image_wrist = to_tensor(image_wrist).unsqueeze(0)
+
+    agent_pos = torch.cat((cartesian_position[:3],gripper_position),dim=-1)  # [B, Ta, Da])
+    agent_pos = agent_pos.unsqueeze(0)
+    nobs = {
+        "image_main": image_main.unsqueeze(1).cuda(),  # [B, Ta, C, H, W]
+        "image_secondary": image_secondary.unsqueeze(1).cuda(),
+        "image_wrist": image_wrist.unsqueeze(1).cuda(),
+        "agent_pos": agent_pos.unsqueeze(0).cuda(),  
+    }
+    import ipdb;ipdb.set_trace()
+
+    with torch.no_grad():
+        action = policy.predict_action(nobs)
+    # You might need to post-process action, depending on model output
+    action_first = action['action'].cpu()[0,1].tolist()
+    trans = action_first[:3]  # Assuming first 7 are joint positions
+    rot  = [0,0,0]
+    arm_action = trans + rot 
+    gripper_action = action_first[3]  # Assuming the 8th is gripper position
+    return jsonify({
+            "arm_action": arm_action,
+            "gripper_action": gripper_action,
+        })
 
 
 @click.command()
@@ -25,42 +140,8 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option("-o", "--output_dir", required=True)
 @click.option("-d", "--device", default="cuda:0")
 def main(checkpoint, output_dir, device):
-    if os.path.exists(output_dir):
-        click.confirm(
-            f"Output path {output_dir} already exists! Overwrite?", abort=True
-        )
-    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    # load checkpoint
-    payload = torch.load(open(checkpoint, "rb"), pickle_module=dill)
-    cfg = payload["cfg"]
-    cls = hydra.utils.get_class(cfg._target_)
-    workspace = cls(cfg, output_dir=output_dir)
-    workspace: BaseWorkspace
-    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
-
-    # get policy from workspace
-    policy = workspace.model
-    if cfg.training.use_ema:
-        policy = workspace.ema_model
-
-    device = torch.device(device)
-    policy.to(device)
-    policy.eval()
-
-    # run eval
-    env_runner = hydra.utils.instantiate(cfg.task.env_runner, output_dir=output_dir)
-    runner_log = env_runner.run(policy)
-
-    # dump log to json
-    json_log = dict()
-    for key, value in runner_log.items():
-        if isinstance(value, wandb.sdk.data_types.video.Video):
-            json_log[key] = value._path
-        else:
-            json_log[key] = value
-    out_path = os.path.join(output_dir, "eval_log.json")
-    json.dump(json_log, open(out_path, "w"), indent=2, sort_keys=True)
+    load_model(checkpoint, output_dir, device)
+    app.run(host='0.0.0.0', port=8889)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,55 @@
+_target_: diffusion_policy.policy.diffusion_unet_hybrid_droid_image_policy.DiffusionUnetHybridImagePolicyDroid
+cond_predict_scale: true
+crop_shape:
+- 84
+- 84
+diffusion_step_embed_dim: 128
+down_dims:
+- 512
+- 1024
+- 2048
+eval_fixed_crop: true
+horizon: 4
+kernel_size: 5
+n_action_steps: 4
+n_groups: 8
+n_obs_steps: 1
+noise_scheduler:
+  _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  clip_sample: true
+  num_train_timesteps: 100
+  prediction_type: epsilon
+  variance_type: fixed_small
+num_inference_steps: 100
+obs_as_global_cond: true
+obs_encoder_group_norm: true
+shape_meta:
+  action:
+    shape:
+    - 8
+  obs:
+    agent_pos:
+      shape:
+      - 8
+      type: low_dim
+    image_main:
+      shape:
+      - 3
+      - 480
+      - 640
+      type: rgb
+    image_secondary:
+      shape:
+      - 3
+      - 480
+      - 640
+      type: rgb
+    # observation.images.secondary:
+    #   shape:
+    #   - 3
+    #   - 480
+    #   - 640
+    #   type: rgb
