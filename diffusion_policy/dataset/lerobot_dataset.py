@@ -43,7 +43,14 @@ from diffusion_policy.dataset.lerobot_utils import (
     load_info,
     np_column,
 )
-from diffusion_policy.dataset.filter import add_target_joint_position, filter_episodes , add_target_joint_delta_gripper_abs,add_target_joint_delta_gripper_abs,add_target_joint_delta_gripper_abs_mask, select_hf_dataset_episodes
+from diffusion_policy.dataset.filter import (
+    add_target_joint_position,
+    filter_episodes,
+    add_target_joint_delta_gripper_abs,
+    add_target_joint_delta_gripper_abs,
+    add_target_joint_delta_gripper_abs_mask,
+    select_hf_dataset_episodes,
+)
 from diffusion_policy.dataset.filter import add_target_cartesian_delta_gripper_abs_mask
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 
@@ -444,7 +451,7 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
             "action.target_cartesian_position",
             "action.target_gripper_position",
             "action.target.cartesian_position_delta",
-            'action.target.cartesian_position_delta_mask',
+            "action.target.cartesian_position_delta_mask",
             # "action.target.joint_position",
             # "action.target.joint_position_delta",
             # "action.target.joint_position_delta_mask" ,
@@ -452,7 +459,7 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
             # "episode_id",
             "observation.images.main",
             "observation.images.secondary",
-            'observation.images.wrist_camera',
+            "observation.images.wrist_camera",
             # 'observation.timestamp.cameras.main',
             # 'observation.timestamp.cameras.secondary',
             # 'observation.timestamp.cameras.wrist_camera',
@@ -465,14 +472,16 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
         self.img_keys = [
             "observation.images.main",
             "observation.images.secondary",
-            'observation.images.wrist_camera',
+            "observation.images.wrist_camera",
         ]
         self.to_tensor = transforms.ToTensor()
         # breakpoint()
         # self._add_target_keys(horizon=5)  # Add target keys with horizon of 5
         # breakpoint()
 
-    def filter_episodes(self, drop_columns: list = [], horizon: int = 5,task_str: str = ""):
+    def filter_episodes(
+        self, drop_columns: list = [], horizon: int = 5, task_str: str = ""
+    ):
         """
         Filter dataset to only include 'open' tasks, drop unused columns, and add future action targets.
         Modifies the dataset in-place.
@@ -480,7 +489,7 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
         # Step 1: Identify open episodes
         if task_str:
             task_list = self.hf_dataset[self.episode_data_index["from"]]["task"]
-            open_episode_mask = np.array([ task_str in task for task in task_list])
+            open_episode_mask = np.array([task_str in task for task in task_list])
 
             # Step 2: Select only 'task_str' episodes
             selected_indices = np.arange(self.num_episodes)[open_episode_mask]
@@ -509,16 +518,18 @@ class LeRobotDatasetDiffusion(LeRobotDataset, BaseImageDataset):
         Replace current dataset with a subset of episodes.
         """
         self.episode_indices = episode_indices
-        return select_hf_dataset_episodes(self.hf_dataset,self.episode_data_index, episode_indices)
+        return select_hf_dataset_episodes(
+            self.hf_dataset, self.episode_data_index, episode_indices
+        )
 
-  
     def __getitem__(self, idx):
         item = self.hf_dataset[idx]
         # for k in self.img_keys:
         #     item[k] = self.to_tensor(item[k])  # CxHxW
 
         return item
-        
+
+
 def eager_transform(example, keys_to_add, img_keys, to_tensor):
     item = {}
     for key in keys_to_add:
@@ -529,17 +540,23 @@ def eager_transform(example, keys_to_add, img_keys, to_tensor):
                 if isinstance(val, Image.Image) or isinstance(val, np.ndarray):
                     item[key] = to_tensor(val)
                 else:
-                    raise TypeError(f"Expected PIL.Image or np.ndarray for {key}, got {type(val)}")
+                    raise TypeError(
+                        f"Expected PIL.Image or np.ndarray for {key}, got {type(val)}"
+                    )
             else:
                 if isinstance(val, np.ndarray):
                     item[key] = torch.tensor(val)
                 elif isinstance(val, list):
                     item[key] = torch.tensor(val)
                 else:
-                    item[key] = torch.tensor([val]) if isinstance(val, (int, float)) else val
+                    item[key] = (
+                        torch.tensor([val]) if isinstance(val, (int, float)) else val
+                    )
         else:
             item[key] = None
     return item
+
+
 def transform_fnc(example, keys_to_add, img_keys, to_tensor):
     # Remove keys that are not needed
     keys_to_remove = set(example.keys()) - set(keys_to_add)
@@ -557,7 +574,9 @@ def transform_fnc(example, keys_to_add, img_keys, to_tensor):
                 elif isinstance(val, np.ndarray):
                     example[key] = to_tensor(val)
                 else:
-                    raise TypeError(f"Expected PIL.Image or np.ndarray for {key}, got {type(val)}")
+                    raise TypeError(
+                        f"Expected PIL.Image or np.ndarray for {key}, got {type(val)}"
+                    )
             else:
                 # Convert other data types to tensor
                 if isinstance(val, np.ndarray):
@@ -565,13 +584,22 @@ def transform_fnc(example, keys_to_add, img_keys, to_tensor):
                 elif isinstance(val, list):
                     example[key] = torch.tensor(val)
                 else:
-                    example[key] = torch.tensor([val]) if isinstance(val, (int, float)) else val
+                    example[key] = (
+                        torch.tensor([val]) if isinstance(val, (int, float)) else val
+                    )
         else:
             # Add key with default value None if not present
             example[key] = None
 
     return example
-def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, output_dir: str = '/scratch/sombit_dey/output_rerun/',output_filename:str = 'rerun_viz.rrd'):
+
+
+def save_rerun_viz_id(
+    dataset: LeRobotDatasetDiffusion,
+    episode_index: int,
+    output_dir: str = "/scratch/sombit_dey/output_rerun/",
+    output_filename: str = "rerun_viz.rrd",
+):
     """
     Save a rerun visualization of the dataset for a specific episode index.
     Args:
@@ -582,22 +610,28 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
     """
     import rerun as rr
     from scipy.spatial.transform import Rotation as R
-    import time 
-    import ipdb; ipdb.set_trace()
+    import time
+    import ipdb
+
+    ipdb.set_trace()
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     # Get the episode data
-    episode_data = dataset.hf_dataset[dataset.episode_data_index['from'][episode_index]:dataset.episode_data_index['to'][episode_index]]
+    episode_data = dataset.hf_dataset[
+        dataset.episode_data_index["from"][episode_index] : dataset.episode_data_index[
+            "to"
+        ][episode_index]
+    ]
 
     dataset_name = dataset.dataset_name
     axis_length = 0.3
     fps = dataset.fps
     # EEF pose in key observation.robot_state.cartesian_position N,6 D vector, in X,Y,Z, R_x,R_y,R_z
     rr.init("visualize_oxe", recording_id=f"{dataset_name}_{episode_index}")
-    cartesian_pose = episode_data['observation.robot_state.cartesian_position'] 
-    rpy = episode_data['observation.robot_state.cartesian_position'][:, 3:6]
-    rot_mats_np = R.from_euler('xyz', rpy).as_matrix() #  [N, 3, 3] D vector
+    cartesian_pose = episode_data["observation.robot_state.cartesian_position"]
+    rpy = episode_data["observation.robot_state.cartesian_position"][:, 3:6]
+    rot_mats_np = R.from_euler("xyz", rpy).as_matrix()  #  [N, 3, 3] D vector
 
     # rr.log(
     #     "robot/ee_pose",
@@ -606,8 +640,8 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
     #         mat3x3=rot_mats_np,
     #         axis_length=axis_length,
     #     ),
-    # )   
-    
+    # )
+
     # translation_control = dataset.np_column('control.translation')
     # rotation_control = dataset.np_column('control.rotation')
     # gripper_control = dataset.np_column('control.gripper')
@@ -628,12 +662,11 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
     # episode_ids = dataset.np_column('episode_index')[dataset.episode_data_index['from']]
     # episode_index: int = np.where(episode_ids == episode_id)[0][0]
 
-    low = dataset.episode_data_index['from'][episode_index]
-    high = dataset.episode_data_index['to'][episode_index]
+    low = dataset.episode_data_index["from"][episode_index]
+    high = dataset.episode_data_index["to"][episode_index]
 
     # language_instruction = str(dataset[int(low)]['observation.language_instruction']).replace(' ', '_')
     start_timestamp = time.time()
-
 
     # Set up gripper series
     # rr.log(
@@ -660,14 +693,17 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
         rr.set_time("frame_index", sequence=frame_index - low)
 
         rr.log(
-            "robot/base", rr.Transform3D(translation=np.zeros(3), mat3x3=np.eye(3), axis_length=axis_length)
+            "robot/base",
+            rr.Transform3D(
+                translation=np.zeros(3), mat3x3=np.eye(3), axis_length=axis_length
+            ),
         )
 
         data_point = dataset[frame_index]
 
         for key, value in data_point.items():
-            if key.startswith('observation.images'):
-                camera_name = key.replace('observation.images.', '')
+            if key.startswith("observation.images"):
+                camera_name = key.replace("observation.images.", "")
                 image_np = np.asarray(value)
                 rr.log(f"camera/{camera_name}", rr.Image(image_np))
 
@@ -678,8 +714,8 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
                 mat3x3=rot_mats_np[frame_index],
                 axis_length=axis_length,
             ),
-        )   
-    
+        )
+
         # EEF pose
         # rr_log_pose("eef_pose", translation_obs[frame_index], rotation_obs[frame_index], axis_length)
 
@@ -698,6 +734,7 @@ def save_rerun_viz_id(dataset:LeRobotDatasetDiffusion, episode_index: int, outpu
         #     rr_log_pose("eef_urdf", urdf_translation[frame_index], urdf_rotation[frame_index], axis_length)
 
     rr.save(os.path.join(output_dir, f"{output_filename}.rrd"))
+
 
 if __name__ == "__main__":
 
@@ -721,7 +758,7 @@ if __name__ == "__main__":
 
     # filter columns , remove wrist camera
     # add_target_joint_position(dataset_open, horizon=5)
-    
+
     # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
     dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/data_insait_carrot_lerobot/")
     # dataset.filter_episodes(
@@ -729,7 +766,7 @@ if __name__ == "__main__":
     #         task_str = 'close',
     #         horizon=5
     #     )
-    cartesian_positions = dataset['observation.robot_state.cartesian_position']
+    cartesian_positions = dataset["observation.robot_state.cartesian_position"]
     positions_array = np.array(cartesian_positions)
     mean_pos = np.mean(positions_array, axis=0)
     std_pos = np.std(positions_array, axis=0)
@@ -739,15 +776,21 @@ if __name__ == "__main__":
     print(f"Mean position: {mean_pos}")
 
     # print(dataset.hf_dataset.column_names)
-    import ipdb; ipdb.set_trace()
-    
-    save_rerun_viz_id(dataset, episode_index=0, output_dir='/scratch/sombit_dey/output_rerun/', output_filename='rerun_viz.rrd')
-    
-    
-    '''
+    import ipdb
+
+    ipdb.set_trace()
+
+    save_rerun_viz_id(
+        dataset,
+        episode_index=0,
+        output_dir="/scratch/sombit_dey/output_rerun/",
+        output_filename="rerun_viz.rrd",
+    )
+
+    """
     Things to do ; 
     1. Check the original image -> verify its rgb values, the dataset is in bgr format, need to 
     2. Check the gripper values -> 0 is for open , 1 is for close , need to be ensured during inference :tick:
     3. Check the cartesian position translation values ->
     4. Check the rotation values -> 
-    ''' 
+    """

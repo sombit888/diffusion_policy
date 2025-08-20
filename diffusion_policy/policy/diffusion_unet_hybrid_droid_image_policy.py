@@ -17,8 +17,9 @@ import robomimic.utils.obs_utils as ObsUtils
 import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
-from einops import rearrange 
+from einops import rearrange
 from huggingface_hub import PyTorchModelHubMixin
+
 
 def underscore_to_dot_keys(d: dict) -> dict:
     """
@@ -36,8 +37,7 @@ def underscore_to_dot_keys(d: dict) -> dict:
     return converted
 
 
-class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
-                                          PyTorchModelHubMixin):
+class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy, PyTorchModelHubMixin):
     def __init__(
         self,
         shape_meta: dict,
@@ -265,7 +265,10 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
         if self.obs_as_global_cond:
             # condition through global feature
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
+                nobs,
+                lambda x: x[:, : self.n_obs_steps, ...]
+                .reshape(-1, *x.shape[2:])
+                .float(),
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
@@ -276,7 +279,10 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
         else:
             # condition through impainting
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
+                nobs,
+                lambda x: x[:, : self.n_obs_steps, ...]
+                .reshape(-1, *x.shape[2:])
+                .float(),
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, To, Do
@@ -312,17 +318,22 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch):
-        # normalize input
-        assert "valid_mask" not in batch
-        # nobs = self.normalizer.normalize(batch["obs"])
-        agent_pos = torch.cat((batch['observation.robot_state.cartesian_position'][:,:3],batch['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
-        obs_img_main = batch["observation.images.main"] # B, H W C , need to transpose to C H W
+    def get_input_from_batch(self, batch):
+        agent_pos = torch.cat(
+            (
+                batch["observation.robot_state.cartesian_position"][:, :3],
+                batch["observation.robot_state.gripper_position"].unsqueeze(-1),
+            ),
+            dim=-1,
+        )  # [B, Ta, Da])
+        obs_img_main = batch[
+            "observation.images.main"
+        ]  # B, H W C , need to transpose to C H W
         obs_img_secondary = batch["observation.images.secondary"]
         obs_img_wrist = batch["observation.images.wrist_camera"]
-        obs_img_main = rearrange(obs_img_main, 'b h w c -> b c h w')
-        obs_img_secondary = rearrange(obs_img_secondary, 'b h w c -> b c h w')
-        obs_img_wrist = rearrange(obs_img_wrist, 'b h w c -> b c h w')
+        obs_img_main = rearrange(obs_img_main, "b h w c -> b c h w")
+        obs_img_secondary = rearrange(obs_img_secondary, "b h w c -> b c h w")
+        obs_img_wrist = rearrange(obs_img_wrist, "b h w c -> b c h w")
         obs_img_main = obs_img_main[:, [2, 1, 0], :, :]  # Swap channels
         obs_img_secondary = obs_img_secondary[:, [2, 1, 0], :, :]  # Swap channels
         obs_img_wrist = obs_img_wrist[:, [2, 1, 0], :, :]  # Swap channels
@@ -332,17 +343,26 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
             "image_wrist": obs_img_wrist.unsqueeze(1),
             "agent_pos": agent_pos.unsqueeze(1),  # normalize to [0, 1]
         }
+
+        return nobs
+
+    def compute_loss(self, batch):
+        # normalize input
+        assert "valid_mask" not in batch
+        nobs = self.get_input_from_batch(batch)
         # nactions = batch["action.target.cartesian_position_delta"]  # [B,Ta,Da]
         nactions = torch.cat(
             [
-                batch["action.target.cartesian_position_delta"][..., :3],   # first 3
-                batch["action.target.cartesian_position_delta"][..., -1:],  # last one (keep dims)
+                batch["action.target.cartesian_position_delta"][..., :3],  # first 3
+                batch["action.target.cartesian_position_delta"][
+                    ..., -1:
+                ],  # last one (keep dims)
             ],
-            dim=-1
-)
-        # TODO: Handle Obs and Action normalization properly 
+            dim=-1,
+        )
+        # TODO: Handle Obs and Action normalization properly
         # nactions = self.normalizer["action"].normalize(batch["action"])
-        
+
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
 
@@ -354,7 +374,10 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(
-                nobs, lambda x: x[:, : self.n_obs_steps, ...].reshape(-1, *x.shape[2:]).float()
+                nobs,
+                lambda x: x[:, : self.n_obs_steps, ...]
+                .reshape(-1, *x.shape[2:])
+                .float(),
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
@@ -392,7 +415,10 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy,
 
         # Predict the noise residual
         pred = self.model(
-            noisy_trajectory.float(), timesteps, local_cond=local_cond, global_cond=global_cond
+            noisy_trajectory.float(),
+            timesteps,
+            local_cond=local_cond,
+            global_cond=global_cond,
         )
 
         pred_type = self.noise_scheduler.config.prediction_type

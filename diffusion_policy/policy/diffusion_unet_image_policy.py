@@ -132,11 +132,11 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        assert "past_action" not in obs_dict  # not implemented yet        
+        assert "past_action" not in obs_dict  # not implemented yet
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         # nobs = obs_dict
-        
+
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon

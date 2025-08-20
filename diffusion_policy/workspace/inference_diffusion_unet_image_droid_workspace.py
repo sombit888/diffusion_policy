@@ -26,7 +26,11 @@ from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
-from diffusion_policy.common.pytorch_util import dict_apply, dict_apply_with_keys, optimizer_to
+from diffusion_policy.common.pytorch_util import (
+    dict_apply,
+    dict_apply_with_keys,
+    optimizer_to,
+)
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from einops import rearrange, reduce
@@ -60,14 +64,14 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
-        self.keys_to_keep = ["observation.images.main",
+        self.keys_to_keep = [
+            "observation.images.main",
             "observation.images.secondary",
             "observation.robot_state.joint_positions",
             "observation.robot_state.gripper_position",
             "action.target.joint_position_delta",
             "action.target.joint_position",
-            ]
-
+        ]
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -79,10 +83,9 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
 
-    
         # configure logging
         if cfg.wandb:
-        
+
             wandb_run = wandb.init(
                 dir=str(self.output_dir),
                 config=OmegaConf.to_container(cfg, resolve=True),
@@ -105,7 +108,9 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
-        import ipdb; ipdb.set_trace()
+        import ipdb
+
+        ipdb.set_trace()
         # save batch for sampling
         train_sampling_batch = None
 
@@ -146,7 +151,7 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                 #         for batch_idx, batch in enumerate(tepoch):
                 #             # device transfer
                 #             batch = dict_apply_with_keys(
-                #                 batch, lambda k, x: x.to(device, non_blocking=True),keys=self.keys_to_keep   
+                #                 batch, lambda k, x: x.to(device, non_blocking=True),keys=self.keys_to_keep
                 #             )
                 #             if train_sampling_batch is None:
                 #                 train_sampling_batch = batch
@@ -250,7 +255,15 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                             train_sampling_batch,
                             lambda x: x.to(device, non_blocking=True),
                         )
-                        agent_pos = torch.cat((batch['observation.robot_state.joint_positions'],batch['observation.robot_state.gripper_position'].unsqueeze(-1)),dim=-1)  # [B, Ta, Da])
+                        agent_pos = torch.cat(
+                            (
+                                batch["observation.robot_state.joint_positions"],
+                                batch[
+                                    "observation.robot_state.gripper_position"
+                                ].unsqueeze(-1),
+                            ),
+                            dim=-1,
+                        )  # [B, Ta, Da])
                         obs_img_main = batch["observation.images.main"]
                         obs_img_secondary = batch["observation.images.secondary"]
                         obs_img_main = rearrange(obs_img_main, "B H W C -> B C H W")
@@ -260,12 +273,16 @@ class InferenceDiffusionUnetImageWorkspaceDroid(BaseWorkspace):
                             "agent_pos": agent_pos.unsqueeze(1),
                         }
                         gt_action = batch["action.target.joint_position"]
-                        delta_action = batch['action.target.joint_position_delta']
-                        result = policy.predict_action(nobs)  
-                        
-                        pred_action = result["action_pred"][:,0] + agent_pos
-                        mse = torch.nn.functional.mse_loss(pred_action[...,:-1], gt_action[...,0,:-1])
-                        mse_delta = torch.nn.functional.mse_loss(result['action_pred'][..., -1:], delta_action[..., -1:])
+                        delta_action = batch["action.target.joint_position_delta"]
+                        result = policy.predict_action(nobs)
+
+                        pred_action = result["action_pred"][:, 0] + agent_pos
+                        mse = torch.nn.functional.mse_loss(
+                            pred_action[..., :-1], gt_action[..., 0, :-1]
+                        )
+                        mse_delta = torch.nn.functional.mse_loss(
+                            result["action_pred"][..., -1:], delta_action[..., -1:]
+                        )
                         step_log["train_action_mse_error"] = mse.item()
                         del batch
                         del obs_img_main
