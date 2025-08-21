@@ -13,6 +13,7 @@ import os
 import hydra
 import torch
 import torch.profiler
+import json
 from omegaconf import OmegaConf
 import pathlib
 from torch.utils.data import DataLoader
@@ -298,8 +299,8 @@ class TrainDiffusionUnetImageWorkspaceDroidCartesian(BaseWorkspace):
 
                 # run diffusion sampling on a training batch
                 # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-
-                if (self.epoch % cfg.training.sample_every) == 0:
+                if False:
+                # if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(

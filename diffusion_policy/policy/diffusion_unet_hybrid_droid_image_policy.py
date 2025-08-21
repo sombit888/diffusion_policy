@@ -19,7 +19,8 @@ import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 from einops import rearrange
 from huggingface_hub import PyTorchModelHubMixin
-
+import json 
+import numpy as np
 
 def underscore_to_dot_keys(d: dict) -> dict:
     """
@@ -179,12 +180,46 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy, PyTorchModelHubMixin)
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
+        self.num_inference_steps = 100
 
         print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
         print(
             "Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters())
         )
+        with open('pose_stats.json', "r") as f:
+            self.robot_pose_stats = json.load(f)
+        # conver the robot pose stats to torch tensors
+        self.register_buffer("robotpose_mean", torch.tensor(self.robot_pose_stats["mean"], dtype=torch.float32))
+        self.register_buffer("robotpose_std", torch.tensor(self.robot_pose_stats["std"], dtype=torch.float32))
+        
+    def normalize_pose(self, pose):
+        """
+        Normalize a single incoming robot Cartesian pose (torch version).
+        
+        Parameters
+        ----------
+        pose : list[float] or torch.Tensor
+            [x,y,z,roll,pitch,yaw]
+        
+        Returns
+        -------
+        normalized_pose : torch.Tensor
+        """
+        
+        # pose = torch.as_tensor(pose, dtype=torch.float32)
 
+        # Linear part (xyz): regular z-score
+        xyz_norm = (pose[:3] - self.robotpose_mean[:3]) / self.robotpose_std[:3] # type: ignore #ignore
+
+        # Angular part (rpy): shortest diff then z-score
+        def angle_diff(a, b):
+            """return shortest signed angular difference between a and b"""
+            return (a - b + torch.pi) % (2 * torch.pi) - torch.pi
+
+        rpy_diff = angle_diff(pose[3:], self.robotpose_mean[3:]) # type: ignore #ignore
+        rpy_norm = rpy_diff / self.robotpose_std[3:] # type: ignore #ignore
+
+        return torch.cat([xyz_norm, rpy_norm])
     # ========= inference  ============
     def conditional_sample(
         self,
@@ -350,7 +385,6 @@ class DiffusionUnetHybridImagePolicyDroid(BaseImagePolicy, PyTorchModelHubMixin)
         # normalize input
         assert "valid_mask" not in batch
         nobs = self.get_input_from_batch(batch)
-        # nactions = batch["action.target.cartesian_position_delta"]  # [B,Ta,Da]
         nactions = torch.cat(
             [
                 batch["action.target.cartesian_position_delta"][..., :3],  # first 3

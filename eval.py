@@ -127,15 +127,15 @@ def predict_action():
         "image_wrist": image_wrist.unsqueeze(1).cuda(),
         "agent_pos": agent_pos.unsqueeze(0).cuda(),
     }
-    import ipdb
-
-    ipdb.set_trace()
 
     with torch.no_grad():
         action = policy.predict_action(nobs)
     # You might need to post-process action, depending on model output
     action_first = action["action"].cpu()[0, 1].tolist()
     trans = action_first[:3]  # Assuming first 7 are joint positions
+    print(trans)
+    # import ipdb
+    # ipdb.set_trace()
     rot = [0, 0, 0]
     arm_action = trans + rot
     gripper_action = action_first[3]  # Assuming the 8th is gripper position

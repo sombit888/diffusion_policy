@@ -734,30 +734,55 @@ def save_rerun_viz_id(
         #     rr_log_pose("eef_urdf", urdf_translation[frame_index], urdf_rotation[frame_index], axis_length)
 
     rr.save(os.path.join(output_dir, f"{output_filename}.rrd"))
+    
+def process_cartesian_with_angles(
+    cartesian_poses: np.ndarray,
+    stats_path="pose_stats.json"
+):
+    """
+    Save Cartesian pose dataset, compute mean & std (linear for xyz, circular for rpy),
+    save stats to JSON.
+    """
+    positions_array = np.array(cartesian_poses, dtype=float)
 
+    # Split linear and angular parts
+    xyz = positions_array[:, :3]
+    rpy = positions_array[:, 3:]
+
+    # Linear mean/std
+    mean_xyz = xyz.mean(axis=0)
+    std_xyz = xyz.std(axis=0)
+
+    # Circular mean/std
+    def circular_mean_std(angles):
+        sin_sum = np.sin(angles).mean(axis=0)
+        cos_sum = np.cos(angles).mean(axis=0)
+        mean = np.arctan2(sin_sum, cos_sum)
+
+        R = np.sqrt(sin_sum**2 + cos_sum**2)
+        std = np.sqrt(-2 * np.log(R + 1e-8))
+        return mean, std
+
+    mean_rpy, std_rpy = circular_mean_std(rpy)
+
+    # Combine
+    mean_pose = np.concatenate([mean_xyz, mean_rpy])
+    std_pose = np.concatenate([std_xyz, std_rpy])
+    starting_pos = positions_array[0].tolist()
+
+    stats = {
+        "starting_position": starting_pos,
+        "mean": mean_pose.tolist(),
+        "std": std_pose.tolist(),
+    }
+
+    # Save stats
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=4)
+
+    return stats
 
 if __name__ == "__main__":
-
-    # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
-    # open_episode_mask =  ["open" in task for task in dataset.hf_dataset[dataset.episode_data_index['from']]['episode_index']]
-    # dataset_open = filter_episodes(dataset, episode_mask=open_episode_mask)
-    # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
-    # open_episode_mask =  ["open" in task for task in dataset.hf_dataset[dataset.episode_data_index['from']]['task']]
-    # dataset_open = filter_episodes(dataset=dataset,
-    #                                episodes_mask=np.array(open_episode_mask))
-    # # delete the orig dataset
-    # del dataset
-    # breakpoint()
-    # # print columns
-    # print(dataset_open.hf_dataset.column_names)
-    # drop_columns= [ 'observation.images.wrist_camera']
-    # dataset_open.hf_dataset = dataset_open.hf_dataset.remove_columns(
-    #             drop_columns)
-    # # print columns after removing wrist camera
-    # print(dataset_open.hf_dataset.column_names)
-
-    # filter columns , remove wrist camera
-    # add_target_joint_position(dataset_open, horizon=5)
 
     # dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/insait_droid/insait_droid/")
     dataset = LeRobotDatasetDiffusion("/scratch/sombit_dey/data_insait_carrot_lerobot/")
@@ -767,25 +792,21 @@ if __name__ == "__main__":
     #         horizon=5
     #     )
     cartesian_positions = dataset["observation.robot_state.cartesian_position"]
-    positions_array = np.array(cartesian_positions)
-    mean_pos = np.mean(positions_array, axis=0)
-    std_pos = np.std(positions_array, axis=0)
-    starting_pos = positions_array[0]
-    print(f"Starting position: {starting_pos}")
-    print(f"Standard deviation of positions: {std_pos}")
-    print(f"Mean position: {mean_pos}")
-
+    cartesian_positions = np.array(cartesian_positions)
+    import ipdb; ipdb.set_trace()
+    process_cartesian_with_angles(cartesian_poses=cartesian_positions,stats_path="pose_stats.json")
+    
     # print(dataset.hf_dataset.column_names)
     import ipdb
 
     ipdb.set_trace()
 
-    save_rerun_viz_id(
-        dataset,
-        episode_index=0,
-        output_dir="/scratch/sombit_dey/output_rerun/",
-        output_filename="rerun_viz.rrd",
-    )
+    # save_rerun_viz_id(
+    #     dataset,
+    #     episode_index=0,
+    #     output_dir="/scratch/sombit_dey/output_rerun/",
+    #     output_filename="rerun_viz.rrd",
+    # )
 
     """
     Things to do ; 
